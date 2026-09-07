@@ -28,7 +28,7 @@ class HorizonCoolerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primaryColor: Colors.blueAccent,
-        scaffoldBackgroundColor: const Color(0xFF111113), // Warna dasar gelap Black Shark
+        scaffoldBackgroundColor: const Color(0xFF111113), 
         useMaterial3: true,
         fontFamily: 'Roboto',
       ),
@@ -54,11 +54,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   StreamSubscription<List<int>>? dataSubscription;
   
   bool isConnected = false;
-  
-  // UUID Layanan Standar ESP32
-  final String serviceUUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"; 
-  final String charRxUUID  = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"; 
-  final String charTxUUID  = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"; 
+
+  // 🔐 SISTEM 1 KUNCI 1 GEMBOK (Berdasarkan Firmware Horizon Cooler Asli)
+  final String serviceUUID = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"; 
+  final String charRxUUID  = "b2c3d4e5-f6a7-4b5c-8d9e-1f2a3b4c5d6e"; 
+  final String charTxUUID  = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
 
   // Data Alat
   String temperature = "--";
@@ -132,10 +132,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- BLUETOOTH MENU & CONNECTION (ANTI-CRASH ESP32) ---
-  
+  // --- BLUETOOTH MENU ---
   void showBluetoothMenu() {
-    // 1. Tampilkan UI Seketika (Tanpa memblokir Thread)
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF15161E),
@@ -164,7 +162,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         }
                         return IconButton(
                           icon: const Icon(Icons.refresh, color: Colors.blueAccent),
-                          onPressed: _startSafeScan, // Tombol refresh
+                          onPressed: _startSafeScan, 
                         );
                       }
                     )
@@ -193,8 +191,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           title: Text(devName, style: TextStyle(color: isTarget ? Colors.white : Colors.grey[400], fontWeight: FontWeight.bold)),
                           subtitle: Text(r.device.remoteId.toString(), style: const TextStyle(color: Colors.grey, fontSize: 11)),
                           onTap: () {
-                            Navigator.pop(context); // Tutup menu dulu
-                            connectToDevice(r.device); // Baru jalankan koneksi
+                            Navigator.pop(context); 
+                            connectToDevice(r.device); 
                           },
                         );
                       },
@@ -208,7 +206,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     ).whenComplete(() => FlutterBluePlus.stopScan());
 
-    // 2. Jalankan Scan di background setelah UI muncul
     _startSafeScan();
   }
 
@@ -223,28 +220,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  // --- KONEKSI ---
   void connectToDevice(BluetoothDevice device) async {
-    // Putuskan perangkat lama jika ada
-    if (targetDevice != null) {
-      await targetDevice!.disconnect();
-    }
+    _showSnackBar("Menyambungkan...", color: Colors.blueGrey);
     
-    targetDevice = device;
-    _showSnackBar("Menyambungkan ke ESP32...", color: Colors.blueGrey);
-
     try {
-       // BERI JEDA NAPAS 1: Hentikan scan dan biarkan ESP32 stabil
        await FlutterBluePlus.stopScan();
-       await Future.delayed(const Duration(milliseconds: 500)); 
-
-       // Hapus listener lama jika ada
+       
+       if (device.isConnected) {
+         await device.disconnect();
+         await Future.delayed(const Duration(milliseconds: 500));
+       }
+       
+       targetDevice = device;
        connectionSubscription?.cancel();
        
-       connectionSubscription = device.connectionState.listen((state) {
+       connectionSubscription = device.connectionState.listen((state) async {
          if (state == BluetoothConnectionState.connected) {
            if (mounted) setState(() => isConnected = true);
-           _showSnackBar("Bluetooth Terhubung! ✅", color: Colors.green);
+           _showSnackBar("Berhasil Terhubung! Mencocokkan Kunci...", color: Colors.green);
+           
+           if (Platform.isAndroid) {
+             try { await device.requestMtu(512); } catch(e){}
+           }
+           
            discoverServices(device);
+           
          } else if (state == BluetoothConnectionState.disconnected) {
            if (mounted) {
              setState(() {
@@ -256,27 +257,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
          }
        });
        
-       // Tingkatkan Timeout jadi 15 detik agar ESP32 punya waktu merespon
-       await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
+       await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
        
     } catch (e) {
-       _showSnackBar("Gagal terkoneksi: Timeout / Jauh", color: Colors.redAccent);
+       _showSnackBar("Gagal terkoneksi: Pastikan ESP32 Menyala", color: Colors.redAccent);
+       await device.disconnect();
     }
   }
 
   void discoverServices(BluetoothDevice device) async {
     try {
-      // BERI JEDA NAPAS 2: Biarkan ESP32 menyelesaikan proses Pairing internalnya
       await Future.delayed(const Duration(milliseconds: 800));
-
       List<BluetoothService> services = await device.discoverServices();
+      
+      bool foundRxTx = false;
+
       for (BluetoothService service in services) {
-        if (service.uuid.toString().toUpperCase() == serviceUUID.toUpperCase()) {
+        // 🔐 PENCOCOKAN GEMBOK UTAMA (Service UUID)
+        if (service.uuid.toString().toLowerCase() == serviceUUID.toLowerCase()) {
+          
           for (BluetoothCharacteristic char in service.characteristics) {
-            if (char.uuid.toString().toUpperCase() == charRxUUID.toUpperCase()) { 
-              rxChar = char; 
-            }
-            if (char.uuid.toString().toUpperCase() == charTxUUID.toUpperCase()) {
+            
+            // 🔐 KUNCI TX (Menerima Data dari ESP32)
+            if (char.uuid.toString().toLowerCase() == charTxUUID.toLowerCase() || char.properties.notify || char.properties.indicate) {
               txChar = char;
               await txChar!.setNotifyValue(true);
               
@@ -284,14 +287,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
               dataSubscription = txChar!.lastValueStream.listen((val) {
                  if (val.isNotEmpty) parseIncomingData(utf8.decode(val));
               });
+              foundRxTx = true;
+            }
+            
+            // 🔐 KUNCI RX (Mengirim Data ke ESP32)
+            if (char.uuid.toString().toLowerCase() == charRxUUID.toLowerCase() || char.properties.write || char.properties.writeWithoutResponse) {
+              rxChar = char;
+              foundRxTx = true;
             }
           }
         }
       }
       
-      // BERI JEDA NAPAS 3: Jangan langsung bombardir perintah SYNC, tunggu sebentar
-      await Future.delayed(const Duration(milliseconds: 500));
-      sendCommand("SYNC"); 
+      if (foundRxTx && rxChar != null) {
+         await Future.delayed(const Duration(milliseconds: 500));
+         sendCommand("SYNC"); 
+         _showSnackBar("Kunci Cocok! Siap Digunakan! 🚀", color: Colors.blueAccent);
+      } else {
+         _showSnackBar("Gembok UUID Tidak Cocok dengan ESP32!", color: Colors.redAccent);
+         await device.disconnect(); // Putus paksa jika gembok salah
+      }
       
     } catch (e) {
       debugPrint("Discovery Error: $e");
@@ -304,8 +319,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void parseIncomingData(String data) {
     if (!mounted) return;
-    
-    // Cegah error parsing jika data dari ESP32 kotor/terpotong
     try {
       if (data.startsWith("TMP:")) {
         setState(() => temperature = data.substring(4).trim().replaceAll(RegExp(r'\.0*'), '')); 
@@ -335,7 +348,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         debugPrint("Send Command Error");
       }
     } else {
-      _showSnackBar("Bluetooth Belum Terhubung!", color: Colors.orangeAccent);
+      _showSnackBar("Kunci Bluetooth Belum Tersinkronisasi!", color: Colors.orangeAccent);
     }
   }
 
@@ -345,7 +358,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     String rawGithubUrl = "https://raw.githubusercontent.com/TenzoNkz/Horizon-Cooler-Firmware/refs/heads/main/horizoncooler.bin";
     _showSnackBar("Injeksi OTA Dimulai...", color: Colors.purpleAccent);
 
-    // Mencegah Buffer Overflow di ESP32 dengan memberi jeda antar pengiriman string
     sendCommand("OTAENTER"); await Future.delayed(const Duration(milliseconds: 600));
     sendCommand("SSID:$ssid"); await Future.delayed(const Duration(milliseconds: 600));
     sendCommand("PASS:$pass"); await Future.delayed(const Duration(milliseconds: 600));
@@ -421,7 +433,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
             child: Row(
               children: [
-                // Left Column (Data)
                 Expanded(
                   flex: 2,
                   child: Column(
@@ -435,11 +446,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                   ),
                 ),
-                // Right Column (Product Image)
                 Expanded(
                   flex: 3,
                   child: Image.asset(
-                    'assets/cooler.png', // WAJIB ADA DI PUBSPEC.YAML
+                    'assets/cooler.png', 
                     fit: BoxFit.contain,
                     height: 220,
                     errorBuilder: (context, error, stackTrace) => 
@@ -496,14 +506,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               child: Column(
                 children: [
-                  // Row 1
                   Row(
                     children: [
                       Expanded(child: _buildWhiteCard("LED Settings", "RGBTOGGLE", icon: Icons.power_settings_new, isActive: isRgbOn)),
                       Expanded(child: _buildWhiteCard("Power Config", "", isVoltageConfig: true)),
                     ],
                   ),
-                  // Row 2
                   Row(
                     children: [
                       Expanded(child: _buildWhiteCard("Key Settings", "MODEAI", icon: Icons.auto_awesome, isActive: isAiModeOn)),
@@ -520,7 +528,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   // --- COMPONENT HELPERS ---
-  
   Widget _buildTopData(String value, String unit, String label, {bool isStatus = false}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
