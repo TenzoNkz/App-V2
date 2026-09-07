@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Versi Bluetooth ini adalah versi paling stabil untuk menghindari error Gradle
   flutter_blue_plus: ^1.32.3
   firebase_core: ^3.6.0
   firebase_database: ^11.1.5
@@ -24,8 +25,6 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-flutter:
-  uses-material-design: true
+  # Mendaftarkan folder assets agar gambar cooler.png bisa dibaca oleh aplikasi
   assets:
     - assets/cooler.png
-    
