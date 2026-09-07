@@ -1,0 +1,31 @@
+name: Horizon Cooler Auto Build
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/cirruslabs/flutter:3.24.3
+
+    steps:
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 2. Fix Permission & Bypass local.properties
+        run: git config --global --add safe.directory '*'
+
+      - name: 3. Install Packages
+        run: flutter pub get
+
+      - name: 4. Build APK Release
+        run: flutter build apk --release
+
+      - name: 5. Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Horizon-Cooler-App
+          path: build/app/outputs/flutter-apk/app-release.apk
+          
