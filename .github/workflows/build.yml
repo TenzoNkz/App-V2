@@ -33,8 +33,8 @@ jobs:
           echo "2. Menghapus folder android lama yang membawa kutukan error..."
           rm -rf android
           
-          echo "3. Membuat ulang pondasi Android 100% sempurna dari nol..."
-          flutter create . --platforms android --org com.horizontalzzz
+          echo "3. Membuat ulang pondasi Android (Mengabaikan nama repo App-V2)..."
+          flutter create --project-name horizon_cooler . --platforms android --org com.horizontalzzz
           
           echo "4. Mengembalikan file google-services.json..."
           cp ./google-services.json android/app/
@@ -65,5 +65,5 @@ jobs:
       - name: 7. Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Horizon-Cooler-App-Magic
+          name: Horizon-Cooler-App-Final
           path: build/app/outputs/flutter-apk/app-release.apk
