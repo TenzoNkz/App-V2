@@ -1,4 +1,4 @@
-name: Horizon Cooler Auto Build
+name: Horizon Cooler MAGIC BUILD
 on:
   push:
     branches: [ "main" ]
@@ -7,7 +7,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: 1. Checkout Repository
         uses: actions/checkout@v4
@@ -25,14 +25,45 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 4. Install Dependencies
+      - name: 4. MAGIC RESET ANDROID FOLDER (GOD MODE)
+        run: |
+          echo "1. Menyelamatkan file google-services.json Anda..."
+          cp android/app/google-services.json ./google-services.json || true
+          
+          echo "2. Menghapus folder android lama yang membawa kutukan error..."
+          rm -rf android
+          
+          echo "3. Membuat ulang pondasi Android 100% sempurna dari nol..."
+          flutter create . --platforms android --org com.horizontalzzz
+          
+          echo "4. Mengembalikan file google-services.json..."
+          cp ./google-services.json android/app/
+          
+          echo "5. Memperbaiki Package Name agar Firebase tidak menolak..."
+          sed -i 's/namespace = ".*/namespace = "com.horizontalzzz.horizoncooler"/g' android/app/build.gradle
+          sed -i 's/applicationId = ".*/applicationId = "com.horizontalzzz.horizoncooler"/g' android/app/build.gradle
+          
+          echo "6. Menyuntikkan Firebase secara otomatis layaknya Hacker..."
+          sed -i 's/id "dev.flutter.flutter-plugin-loader" version "1.0.0"/id "dev.flutter.flutter-plugin-loader" version "1.0.0"\n    id "com.google.gms.google-services" version "4.4.1" apply false/g' android/settings.gradle
+          sed -i 's/id "dev.flutter.flutter-gradle-plugin"/id "dev.flutter.flutter-gradle-plugin"\n    id "com.google.gms.google-services"/g' android/app/build.gradle
+          
+          echo "" >> android/app/build.gradle
+          echo "dependencies {" >> android/app/build.gradle
+          echo "    implementation platform('com.google.firebase:firebase-bom:33.4.0')" >> android/app/build.gradle
+          echo "    implementation 'com.google.firebase:firebase-analytics'" >> android/app/build.gradle
+          echo "}" >> android/app/build.gradle
+          
+          echo "7. Membuka Gerbang Bluetooth di AndroidManifest..."
+          sed -i 's/<application/<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" \/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" \/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" \/>\n    <application/g' android/app/src/main/AndroidManifest.xml
+
+      - name: 5. Install Packages
         run: flutter pub get
 
-      - name: 5. Build APK
+      - name: 6. Build Release APK
         run: flutter build apk --release
 
-      - name: 6. Upload Artifact
+      - name: 7. Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Horizon-Cooler-App
+          name: Horizon-Cooler-App-Magic
           path: build/app/outputs/flutter-apk/app-release.apk
