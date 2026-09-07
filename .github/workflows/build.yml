@@ -25,25 +25,37 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 4. MAGIC RESET ANDROID FOLDER (GOD MODE)
+      - name: 4. MAGIC RESET ANDROID FOLDER & FIX BLUETOOTH BUG
         run: |
-          echo "1. Menyelamatkan file google-services.json Anda..."
+          echo "1. Menyelamatkan file google-services.json..."
           cp android/app/google-services.json ./google-services.json || true
           
-          echo "2. Menghapus folder android lama yang membawa kutukan error..."
+          echo "2. Menghapus folder android..."
           rm -rf android
           
-          echo "3. Membuat ulang pondasi Android (Mengabaikan nama repo App-V2)..."
+          echo "3. Membuat ulang pondasi Android..."
           flutter create --project-name horizon_cooler . --platforms android --org com.horizontalzzz
           
-          echo "4. Mengembalikan file google-services.json..."
+          echo "4. Mengembalikan google-services.json..."
           cp ./google-services.json android/app/
           
-          echo "5. Memperbaiki Package Name agar Firebase tidak menolak..."
-          sed -i 's/namespace = ".*/namespace = "com.horizontalzzz.horizoncooler"/g' android/app/build.gradle
-          sed -i 's/applicationId = ".*/applicationId = "com.horizontalzzz.horizoncooler"/g' android/app/build.gradle
+          echo "5. Menambal build.gradle agar Flutter Blue Plus tidak error compileSdk..."
+          echo "" >> android/build.gradle
+          echo "allprojects {" >> android/build.gradle
+          echo "    subprojects {" >> android/build.gradle
+          echo "        afterEvaluate { project ->" >> android/build.gradle
+          echo "            if (project.hasProperty('android')) {" >> android/build.gradle
+          echo "                project.android {" >> android/build.gradle
+          echo "                    if (namespace == null) { namespace project.group }" >> android/build.gradle
+          echo "                    compileSdkVersion 34" >> android/build.gradle
+          echo "                    defaultConfig { minSdkVersion 23; targetSdkVersion 34 }" >> android/build.gradle
+          echo "                }" >> android/build.gradle
+          echo "            }" >> android/build.gradle
+          echo "}" >> android/build.gradle
+          echo "    }" >> android/build.gradle
+          echo "}" >> android/build.gradle
           
-          echo "6. Menyuntikkan Firebase secara otomatis layaknya Hacker..."
+          echo "6. Menyuntikkan Firebase..."
           sed -i 's/id "dev.flutter.flutter-plugin-loader" version "1.0.0"/id "dev.flutter.flutter-plugin-loader" version "1.0.0"\n    id "com.google.gms.google-services" version "4.4.1" apply false/g' android/settings.gradle
           sed -i 's/id "dev.flutter.flutter-gradle-plugin"/id "dev.flutter.flutter-gradle-plugin"\n    id "com.google.gms.google-services"/g' android/app/build.gradle
           
@@ -65,5 +77,5 @@ jobs:
       - name: 7. Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Horizon-Cooler-App-Final
+          name: Horizon-Cooler-App-Success
           path: build/app/outputs/flutter-apk/app-release.apk
