@@ -25,7 +25,7 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 4. MAGIC RESET ANDROID FOLDER & PACKAGE ALIGNMENT
+      - name: 4. MAGIC RESET ANDROID FOLDER & REMOVE UNDERSCORE
         run: |
           echo "1. Menyelamatkan file google-services.json..."
           cp android/app/google-services.json ./google-services.json || true
@@ -33,13 +33,13 @@ jobs:
           echo "2. Menghapus folder android..."
           rm -rf android
           
-          echo "3. Membuat ulang pondasi Android..."
-          flutter create --project-name horizon_cooler . --platforms android --org com.horizontalzzz
+          echo "3. Membuat ulang pondasi Android dengan nama horizoncooler (tanpa underscore)..."
+          flutter create --project-name horizoncooler . --platforms android --org com.horizontalzzz
           
           echo "4. Mengembalikan google-services.json..."
           cp ./google-services.json android/app/
           
-          echo "5. Memperbaiki Package Name agar persis com.horizontalzzz.horizoncooler..."
+          echo "5. Memastikan Package Name persis com.horizontalzzz.horizoncooler..."
           sed -i 's/namespace "com.horizontalzzz.horizon_cooler"/namespace "com.horizontalzzz.horizoncooler"/g' android/app/build.gradle
           sed -i 's/applicationId "com.horizontalzzz.horizon_cooler"/applicationId "com.horizontalzzz.horizoncooler"/g' android/app/build.gradle
           
