@@ -25,7 +25,7 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 4. MAGIC RESET ANDROID FOLDER & SAFE PATCH
+      - name: 4. MAGIC RESET ANDROID FOLDER & DIRECT PLUGIN PATCH
         run: |
           echo "1. Menyelamatkan file google-services.json..."
           cp android/app/google-services.json ./google-services.json || true
@@ -52,8 +52,14 @@ jobs:
           echo "6. Membuka Gerbang Bluetooth di AndroidManifest..."
           sed -i 's/<application/<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" \/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" \/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" \/>\n    <application/g' android/app/src/main/AndroidManifest.xml
 
-      - name: 5. Install Packages
-        run: flutter pub get
+      - name: 5. Install Packages & Patch Plugin Cache
+        run: |
+          flutter pub get
+          echo "Menambal file internal flutter_blue_plus yang error..."
+          find ~/.pub-cache -name "build.gradle" -path "*flutter_blue_plus*" -exec sed -i "s/flutter\.compileSdkVersion/34/g" {} \;
+          find ~/.pub-cache -name "build.gradle" -path "*flutter_blue_plus*" -exec sed -i "s/android {/android {\n    compileSdkVersion 34/g" {} \;
+          find ~/.pub-cache -name "build.gradle" -path "*flutter_blue_plus*" -exec sed -i "/kotlin/a minSdk 23\n    targetSdk 34" {} \;
+          echo "Selesai menambal plugin!"
 
       - name: 6. Build Release APK
         run: flutter build apk --release
