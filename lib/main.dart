@@ -55,7 +55,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   
   bool isConnected = false;
 
-  // 🔐 SISTEM 1 KUNCI 1 GEMBOK (Berdasarkan Firmware Horizon Cooler Asli)
+  // 🔐 SISTEM 1 KUNCI 1 GEMBOK
   final String serviceUUID = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"; 
   final String charRxUUID  = "b2c3d4e5-f6a7-4b5c-8d9e-1f2a3b4c5d6e"; 
   final String charTxUUID  = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
@@ -72,11 +72,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String firebaseStatus = "Offline";
   bool isCloudSyncing = false;
 
-  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
+  // ☁️ KONFIGURASI PAKSA URL REGIONAL ASIA SOUTHEAST 1
+  late final DatabaseReference _dbRef;
+  final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
   @override
   void initState() {
     super.initState();
+    // Mengunci jalur khusus ke server Singapura
+    _dbRef = FirebaseDatabase.instanceFor(
+      app: Firebase.app(), 
+      databaseURL: firebaseDbUrl
+    ).ref();
+
     _requestPermissions();
     _initFirebaseMonitoring();
   }
@@ -100,21 +108,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _initFirebaseMonitoring() {
-    _dbRef.child("telemetry").onValue.listen((event) {
-      if (mounted && event.snapshot.value != null) {
-        setState(() {
-          firebaseStatus = "Online";
-          isCloudSyncing = true;
-        });
-      }
-    }, onError: (error) {
-      if (mounted) {
-        setState(() {
-          firebaseStatus = "Offline";
-          isCloudSyncing = false;
-        });
-      }
-    });
+    // 📡 MENGGUNAKAN SENSOR SOKET INTERNAL FIREBASE (.info/connected)
+    FirebaseDatabase.instanceFor(app: Firebase.app(), databaseURL: firebaseDbUrl)
+      .ref(".info/connected")
+      .onValue
+      .listen((event) {
+        if (mounted) {
+          final connected = event.snapshot.value as bool? ?? false;
+          setState(() {
+            if (connected) {
+              firebaseStatus = "Online";
+              isCloudSyncing = true;
+            } else {
+              firebaseStatus = "Offline";
+              isCloudSyncing = false;
+            }
+          });
+        }
+      });
   }
 
   void _showSnackBar(String message, {Color color = Colors.blueAccent}) {
@@ -273,12 +284,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       bool foundRxTx = false;
 
       for (BluetoothService service in services) {
-        // 🔐 PENCOCOKAN GEMBOK UTAMA (Service UUID)
         if (service.uuid.toString().toLowerCase() == serviceUUID.toLowerCase()) {
-          
           for (BluetoothCharacteristic char in service.characteristics) {
             
-            // 🔐 KUNCI TX (Menerima Data dari ESP32)
             if (char.uuid.toString().toLowerCase() == charTxUUID.toLowerCase() || char.properties.notify || char.properties.indicate) {
               txChar = char;
               await txChar!.setNotifyValue(true);
@@ -290,7 +298,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               foundRxTx = true;
             }
             
-            // 🔐 KUNCI RX (Mengirim Data ke ESP32)
             if (char.uuid.toString().toLowerCase() == charRxUUID.toLowerCase() || char.properties.write || char.properties.writeWithoutResponse) {
               rxChar = char;
               foundRxTx = true;
@@ -305,7 +312,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
          _showSnackBar("Kunci Cocok! Siap Digunakan! 🚀", color: Colors.blueAccent);
       } else {
          _showSnackBar("Gembok UUID Tidak Cocok dengan ESP32!", color: Colors.redAccent);
-         await device.disconnect(); // Putus paksa jika gembok salah
+         await device.disconnect(); 
       }
       
     } catch (e) {
@@ -322,10 +329,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     try {
       if (data.startsWith("TMP:")) {
         setState(() => temperature = data.substring(4).trim().replaceAll(RegExp(r'\.0*'), '')); 
-        _dbRef.child("telemetry/temperature").set(temperature);
+        if(isCloudSyncing) _dbRef.child("telemetry/temperature").set(temperature);
       } else if (data.startsWith("VOL:")) {
         setState(() => voltage = data.substring(4).trim());
-        _dbRef.child("telemetry/voltage").set(voltage);
+        if(isCloudSyncing) _dbRef.child("telemetry/voltage").set(voltage);
       } else if (data.startsWith("RGB:")) {
         setState(() => isRgbOn = data.substring(4).trim() == "1");
       } else if (data.startsWith("AI:")) {
