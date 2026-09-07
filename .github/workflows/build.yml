@@ -25,7 +25,7 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 4. MAGIC RESET ANDROID FOLDER & UPGRADE TO LATEST KOTLIN
+      - name: 4. MAGIC RESET ANDROID FOLDER & UPGRADE TO KOTLIN 2.1.0
         run: |
           echo "1. Menyelamatkan file google-services.json..."
           cp android/app/google-services.json ./google-services.json || true
@@ -39,8 +39,8 @@ jobs:
           echo "4. Mengembalikan google-services.json..."
           cp ./google-services.json android/app/
           
-          echo "5. Mengupgrade Kotlin ke versi terbaru (Latest) di settings.gradle..."
-          sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle
+          echo "5. Mengupgrade Kotlin ke versi 2.1.0 (Latest) di settings.gradle..."
+          sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.1.0"/g' android/settings.gradle
           
           echo "6. Menyuntikkan Firebase & Google Services..."
           sed -i 's/id "dev.flutter.flutter-plugin-loader" version "1.0.0"/id "dev.flutter.flutter-plugin-loader" version "1.0.0"\n    id "com.google.gms.google-services" version "4.4.1" apply false/g' android/settings.gradle
