@@ -51,14 +51,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   BluetoothCharacteristic? txChar;
   BluetoothCharacteristic? rxChar;
   
-  StreamSubscription<List<ScanResult>>? scanSubscription;
   StreamSubscription<BluetoothConnectionState>? connectionSubscription;
   StreamSubscription<List<int>>? dataSubscription;
   
-  bool isScanning = false;
   bool isConnected = false;
   
-  // UUID Layanan Standar
+  // UUID Layanan Standar ESP32
   final String serviceUUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"; 
   final String charRxUUID  = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"; 
   final String charTxUUID  = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"; 
@@ -87,20 +85,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
-    scanSubscription?.cancel();
     connectionSubscription?.cancel();
     dataSubscription?.cancel();
     targetDevice?.disconnect();
     super.dispose();
   }
 
-  // --- LOGIC ---
+  // --- PERMISSIONS & CLOUD ---
   Future<void> _requestPermissions() async {
     if (Platform.isAndroid) {
       await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
-        Permission.location, 
+        Permission.location,
       ].request();
     }
   }
@@ -128,7 +125,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message, style: const TextStyle(fontWeight: FontWeight.bold)),
+        content: Text(message, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -138,55 +135,147 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  void startScan() async {
-    if (isScanning) return;
-    
-    // Minta izin secara paksa saat tombol ditekan (jika sebelumnya ditolak)
+  // --- BLUETOOTH MENU (BOTTOM SHEET) ---
+  void showBluetoothMenu() async {
+    // 1. Validasi Izin
     if (Platform.isAndroid) {
-      await [
-        Permission.bluetoothScan,
-        Permission.bluetoothConnect,
-        Permission.location,
-      ].request();
+      var scanStatus = await Permission.bluetoothScan.status;
+      var connectStatus = await Permission.bluetoothConnect.status;
+      if (!scanStatus.isGranted || !connectStatus.isGranted) {
+        await _requestPermissions();
+      }
     }
 
-    setState(() => isScanning = true);
-    if (targetDevice != null) disconnectDevice();
-    
+    // 2. Mulai Memindai
     try {
-      // Langsung tembak scan. Jika bluetooth mati, ini akan melempar error dan masuk ke catch
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 7));
-      
-      scanSubscription = FlutterBluePlus.scanResults.listen((results) {
-        for (ScanResult r in results) {
-          // Fallback membaca nama dari platformName atau advName
-          String devName = r.device.platformName.toUpperCase();
-          if (devName.isEmpty) devName = r.advertisementData.advName.toUpperCase();
-
-          if (devName.contains("HORIZON COOLER")) {
-            FlutterBluePlus.stopScan();
-            connectToDevice(r.device);
-            break;
-          }
-        }
-      });
-
-      Future.delayed(const Duration(seconds: 7), () {
-        if (mounted) setState(() => isScanning = false);
-      });
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
     } catch (e) {
-      _showSnackBar("Gagal memindai! Pastikan Bluetooth & Lokasi aktif.", color: Colors.redAccent);
-      if (mounted) setState(() => isScanning = false);
+      _showSnackBar("Gagal mengaktifkan pemindai BLE. Cek Bluetooth Anda.", color: Colors.redAccent);
+      return;
     }
+
+    // 3. Tampilkan Visual UI Bottom Sheet
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF15161E),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+      ),
+      builder: (context) {
+        return SizedBox(
+          height: MediaQuery.of(context).size.height * 0.65,
+          child: Column(
+            children: [
+              // Header Menu
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E202B),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 10)],
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text("Pilih Perangkat", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 1)),
+                    StreamBuilder<bool>(
+                      stream: FlutterBluePlus.isScanning,
+                      initialData: false,
+                      builder: (c, snapshot) {
+                        if (snapshot.data == true) {
+                          return const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.blueAccent, strokeWidth: 2.5));
+                        }
+                        return IconButton(
+                          icon: const Icon(Icons.refresh_rounded, color: Colors.blueAccent, size: 28),
+                          onPressed: () => FlutterBluePlus.startScan(timeout: const Duration(seconds: 15)),
+                        );
+                      }
+                    )
+                  ],
+                ),
+              ),
+              
+              // List Perangkat
+              Expanded(
+                child: StreamBuilder<List<ScanResult>>(
+                  stream: FlutterBluePlus.scanResults,
+                  initialData: const [],
+                  builder: (c, snapshot) {
+                    final results = snapshot.data ?? [];
+                    if (results.isEmpty) {
+                      return const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.bluetooth_searching, color: Colors.grey, size: 50),
+                            SizedBox(height: 15),
+                            Text("Mencari perangkat Horizon...", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      );
+                    }
+                    
+                    return ListView.builder(
+                      physics: const BouncingScrollPhysics(),
+                      itemCount: results.length,
+                      itemBuilder: (context, index) {
+                        final r = results[index];
+                        // Mengambil nama perangkat (Prioritaskan platformName, lalu advName)
+                        String devName = r.device.platformName.isNotEmpty ? r.device.platformName : r.advertisementData.advName;
+                        if (devName.isEmpty) devName = "Unknown Device";
+                        
+                        bool isTarget = devName.toUpperCase().contains("HORIZON");
+
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 25, vertical: 5),
+                          leading: Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: isTarget ? Colors.blueAccent.withOpacity(0.2) : Colors.white10,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(Icons.bluetooth, color: isTarget ? Colors.blueAccent : Colors.grey),
+                          ),
+                          title: Text(devName, style: TextStyle(color: isTarget ? Colors.white : Colors.grey[400], fontWeight: FontWeight.bold)),
+                          subtitle: Text(r.device.remoteId.toString(), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                          trailing: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(10)),
+                            child: Text("${r.rssi} dBm", style: TextStyle(color: r.rssi > -70 ? Colors.greenAccent : Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                          ),
+                          onTap: () {
+                            FlutterBluePlus.stopScan();
+                            Navigator.pop(context); // Tutup BottomSheet
+                            connectToDevice(r.device); // Eksekusi Koneksi
+                          },
+                        );
+                      },
+                    );
+                  },
+                )
+              ),
+            ],
+          ),
+        );
+      }
+    ).whenComplete(() {
+      FlutterBluePlus.stopScan(); // Pastikan scan berhenti saat menu ditutup
+    });
   }
 
+  // --- BLUETOOTH CONNECTION LOGIC ---
   void connectToDevice(BluetoothDevice device) async {
+    if (targetDevice != null) disconnectDevice();
     targetDevice = device;
     
+    _showSnackBar("Menyambungkan ke ${device.platformName.isNotEmpty ? device.platformName : 'perangkat'}...", color: Colors.blueGrey);
+
     connectionSubscription = device.connectionState.listen((state) {
       if (state == BluetoothConnectionState.connected) {
         if (mounted) setState(() => isConnected = true);
-        _showSnackBar("Terhubung ke Horizon Cooler!", color: Colors.green);
+        _showSnackBar("Berhasil Terhubung! ✅", color: Colors.green);
         discoverServices(device);
       } else if (state == BluetoothConnectionState.disconnected) {
         if (mounted) {
@@ -198,14 +287,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
             voltage = "--V";
           });
         }
-        _showSnackBar("Koneksi Terputus", color: Colors.redAccent);
+        _showSnackBar("Koneksi Terputus ❌", color: Colors.redAccent);
       }
     });
     
     try {
        await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
     } catch (e) {
-       _showSnackBar("Gagal terkoneksi ke perangkat", color: Colors.redAccent);
+       _showSnackBar("Gagal terkoneksi: Timeout/Ditolak", color: Colors.redAccent);
     }
   }
 
@@ -381,13 +470,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12.0),
-            child: isScanning 
-              ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.blueAccent, strokeWidth: 2.5)))
-              : IconButton(
-                  icon: Icon(isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled, 
-                             color: isConnected ? Colors.blueAccent : Colors.redAccent, size: 28),
-                  onPressed: isConnected ? disconnectDevice : startScan,
-                ),
+            child: IconButton(
+              // Tombol ini sekarang membuka Menu Bluetooth, atau memutus koneksi
+              icon: Icon(isConnected ? Icons.bluetooth_connected : Icons.bluetooth, 
+                         color: isConnected ? Colors.blueAccent : Colors.white, size: 28),
+              onPressed: isConnected ? disconnectDevice : showBluetoothMenu,
+            ),
           )
         ],
       ),
@@ -398,7 +486,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // 1. Firebase Status Banner
               AnimatedContainer(
                 duration: const Duration(milliseconds: 500),
                 padding: const EdgeInsets.symmetric(vertical: 12),
@@ -419,7 +506,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               
               const SizedBox(height: 25),
               
-              // 2. Main Telemetry Card
               Container(
                 padding: const EdgeInsets.all(25),
                 decoration: BoxDecoration(
@@ -445,7 +531,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               
               const SizedBox(height: 30),
               
-              // 3. Control Panel Grid
               Row(
                 children: [
                   Expanded(child: _buildAnimatedBtn("MODE AI", Icons.smart_toy, isAiModeOn, Colors.deepPurpleAccent, "MODEAI")),
@@ -464,7 +549,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               
               const SizedBox(height: 35),
               
-              // 4. Voltage Selector
               const Text("PILIH TEGANGAN MANUAL", style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
               const SizedBox(height: 12),
               Row(
@@ -478,7 +562,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               
               const SizedBox(height: 35),
               
-              // 5. RGB Brightness
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -505,7 +588,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               
               const SizedBox(height: 35),
               
-              // 6. OTA Update Section
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
