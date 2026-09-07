@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "458338413740",
+    "project_id": "horizon-cooler-a4723",
+    "storage_bucket": "horizon-cooler-a4723.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:458338413740:android:ffffafdab3fb70193f4309",
+        "android_client_info": {
+          "package_name": "com.horizontalzzz.horizoncooler"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBqgVjZoO89R2yLI1l375zAIsmiTWrHVPI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
