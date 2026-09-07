@@ -25,7 +25,7 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 4. MAGIC RESET ANDROID FOLDER & FIX BLUETOOTH BUG
+      - name: 4. MAGIC RESET ANDROID FOLDER & SAFE PATCH
         run: |
           echo "1. Menyelamatkan file google-services.json..."
           cp android/app/google-services.json ./google-services.json || true
@@ -39,21 +39,7 @@ jobs:
           echo "4. Mengembalikan google-services.json..."
           cp ./google-services.json android/app/
           
-          echo "5. Menambal build.gradle tanpa konflik afterEvaluate..."
-          echo "" >> android/build.gradle
-          echo "allprojects {" >> android/build.gradle
-          echo "    subprojects {" >> android/build.gradle
-          echo "        if (project.hasProperty('android')) {" >> android/build.gradle
-          echo "            project.android {" >> android/build.gradle
-          echo "                if (namespace == null) { namespace project.group }" >> android/build.gradle
-          echo "                compileSdkVersion 34" >> android/build.gradle
-          echo "                defaultConfig { minSdkVersion 23; targetSdkVersion 34 }" >> android/build.gradle
-          echo "            }" >> android/build.gradle
-          echo "        }" >> android/build.gradle
-          echo "    }" >> android/build.gradle
-          echo "}" >> android/build.gradle
-          
-          echo "6. Menyuntikkan Firebase..."
+          echo "5. Menyuntikkan Firebase..."
           sed -i 's/id "dev.flutter.flutter-plugin-loader" version "1.0.0"/id "dev.flutter.flutter-plugin-loader" version "1.0.0"\n    id "com.google.gms.google-services" version "4.4.1" apply false/g' android/settings.gradle
           sed -i 's/id "dev.flutter.flutter-gradle-plugin"/id "dev.flutter.flutter-gradle-plugin"\n    id "com.google.gms.google-services"/g' android/app/build.gradle
           
@@ -63,7 +49,7 @@ jobs:
           echo "    implementation 'com.google.firebase:firebase-analytics'" >> android/app/build.gradle
           echo "}" >> android/app/build.gradle
           
-          echo "7. Membuka Gerbang Bluetooth di AndroidManifest..."
+          echo "6. Membuka Gerbang Bluetooth di AndroidManifest..."
           sed -i 's/<application/<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" \/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" \/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" \/>\n    <application/g' android/app/src/main/AndroidManifest.xml
 
       - name: 5. Install Packages
