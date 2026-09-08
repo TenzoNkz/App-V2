@@ -60,7 +60,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final String charTxUUID  = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
 
   String hotsideTemp = "--"; 
-  String voltage = "--";
+  String voltage = "5V";
   bool isRgbOn = true;
   bool isAiModeOn = false;
   double brightness = 255;
@@ -351,13 +351,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           for (String l in lines) {
             _updateField(l.trim());
           }
-          // SATU KALI setState setelah seluruh parameter tuntas terbaca
-          setState(() {});
+          setState(() {}); // Render serempak
           return;
         }
       }
 
-      // 2. Tangani Update Nilai Tunggal Setelah Sinkronisasi Selesai
+      // 2. Tangani Update Nilai Tunggal Setelah Sinkronisasi
       if (!_incomingBuffer.contains("<SYNC_START>")) {
         while (_incomingBuffer.contains('\n')) {
           int nl = _incomingBuffer.indexOf('\n');
