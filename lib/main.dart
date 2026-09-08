@@ -117,7 +117,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _batteryTempTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
       try {
         final double nativeTemp = await platformChannel.invokeMethod('getBatteryTemperature');
-        if (mounted) {
+        if (mounted && nativeTemp > 0) {
           setState(() {
             phoneBatteryTemp = nativeTemp;
           });
@@ -133,7 +133,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _requestPermissions() async {
     if (Platform.isAndroid) {
+      // 1. Minta akses Permissions Izin
       await [Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location].request();
+      
+      // 2. Paksa Nyalakan Hardware Bluetooth
+      try {
+        if (await FlutterBluePlus.adapterState.first == BluetoothAdapterState.off) {
+          await FlutterBluePlus.turnOn();
+        }
+      } catch (e) {}
+
+      // 3. Paksa Nyalakan Hardware GPS/Lokasi
+      ServiceStatus locationStatus = await Permission.locationWhenInUse.serviceStatus;
+      if (!locationStatus.isEnabled) {
+        try {
+          await platformChannel.invokeMethod('enableLocation');
+        } catch (e) {}
+      }
     }
   }
 
@@ -203,7 +219,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   initialData: const [],
                   builder: (c, snapshot) {
                     final results = snapshot.data ?? [];
-                    // PENTING: Filter eksklusif hanya memunculkan perangkat bernama "HORIZON"
                     final horizonDevices = results.where((r) {
                       String devName = r.device.platformName.isNotEmpty ? r.device.platformName : r.advertisementData.advName;
                       return devName.toUpperCase().contains("HORIZON");
@@ -237,7 +252,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _startSafeScan() async {
-    if (Platform.isAndroid) await [Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location].request();
+    await _requestPermissions(); // Panggil kembali untuk memastikan sebelum scan
     try { await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15)); } catch (e) { }
   }
 
@@ -321,6 +336,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!mounted) return;
     try {
       _bleBuffer += rawData;
+      bool shouldUpdateUI = false;
+
+      // PARSING SIMULTAN: Kumpulkan semua data dulu tanpa refresh UI (Mencegah Lag!)
       while (_bleBuffer.contains('\n')) {
         int index = _bleBuffer.indexOf('\n');
         String line = _bleBuffer.substring(0, index).trim();
@@ -333,39 +351,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
           String key = parts[0].trim();
           String value = parts[1].trim();
 
-          setState(() {
-            if (key == "TMP") {
-              hotsideTemp = value.replaceAll(RegExp(r'\.0+$'), '');
-              if (isCloudSyncing && _dbRef != null) {
-                _dbRef!.child("telemetry/hotside_temp").set(hotsideTemp);
-              }
-            } else if (key == "VOL") {
-              voltage = value;
-              if (isCloudSyncing && _dbRef != null) {
-                _dbRef!.child("telemetry/voltage").set(voltage);
-              }
-            } else if (key == "RGB") {
-              isRgbOn = (value == "1");
-            } else if (key == "AI") {
-              isAiModeOn = (value == "1");
-            } else if (key == "BRV") {
-              brightness = double.tryParse(value) ?? 255;
-            } else if (key == "VER") {
-              currentVersion = value;
-            } else if (key == "MD") {
-              rgbModeIndex = (int.tryParse(value) ?? 0) + 1;
-            } else if (key == "LHT") {
-              limitHot = int.tryParse(value) ?? 45;
-            } else if (key == "LB5") {
-              limitBat5v = int.tryParse(value) ?? 25;
-            } else if (key == "LB9") {
-              limitBat9v = int.tryParse(value) ?? 30;
-            } else if (key == "LB12") {
-              limitBat12v = int.tryParse(value) ?? 35;
-            }
-          });
+          if (key == "TMP") {
+            hotsideTemp = value.replaceAll(RegExp(r'\.0+$'), '');
+            if (isCloudSyncing && _dbRef != null) _dbRef!.child("telemetry/hotside_temp").set(hotsideTemp);
+            shouldUpdateUI = true;
+          } else if (key == "VOL") {
+            voltage = value;
+            if (isCloudSyncing && _dbRef != null) _dbRef!.child("telemetry/voltage").set(voltage);
+            shouldUpdateUI = true;
+          } else if (key == "RGB") {
+            isRgbOn = (value == "1");
+            shouldUpdateUI = true;
+          } else if (key == "AI") {
+            isAiModeOn = (value == "1");
+            shouldUpdateUI = true;
+          } else if (key == "BRV") {
+            brightness = double.tryParse(value) ?? 255;
+            shouldUpdateUI = true;
+          } else if (key == "VER") {
+            currentVersion = value;
+            shouldUpdateUI = true;
+          } else if (key == "MD") {
+            rgbModeIndex = (int.tryParse(value) ?? 0);
+            shouldUpdateUI = true;
+          } else if (key == "LHT") {
+            limitHot = int.tryParse(value) ?? 45;
+            shouldUpdateUI = true;
+          } else if (key == "LB5") {
+            limitBat5v = int.tryParse(value) ?? 25;
+            shouldUpdateUI = true;
+          } else if (key == "LB9") {
+            limitBat9v = int.tryParse(value) ?? 30;
+            shouldUpdateUI = true;
+          } else if (key == "LB12") {
+            limitBat12v = int.tryParse(value) ?? 35;
+            shouldUpdateUI = true;
+          }
         }
       }
+
+      // Refresh UI hanya 1X setelah seluruh tumpukan data terkumpul
+      if (shouldUpdateUI) {
+        setState(() {});
+      }
+
     } catch (e) { debugPrint("Parsing Error"); }
   }
 
