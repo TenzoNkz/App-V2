@@ -60,7 +60,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final String charTxUUID  = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
 
   // --- DATA ALAT & STATUS ---
-  String hotsideTemp = "--"; // ESP32 Temperature
+  String hotsideTemp = "--"; 
   String voltage = "--";
   bool isRgbOn = false;
   bool isAiModeOn = false;
@@ -74,17 +74,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // --- MENU & SETTINGS VARIABLES ---
   int selectedMenuIndex = 0; // 0:Voltage, 1:AI, 2:RGB, 3:Temp Settings
   
-  // Realtime HP Battery Temp Mock
   double phoneBatteryTemp = 32.5; 
   Timer? _phoneTempMockTimer;
 
-  // AI Mode Selection
-  int aiModeType = 0; // 0: Overheat Protection, 1: Overheat + Baterai Protection
-  
-  // RGB Settings
+  int aiModeType = 0; 
   int rgbModeNumber = 1;
 
-  // Temp Settings (Sesuai Default Prompt)
   int limitHot = 45;
   int limitBat5v = 25;
   int limitBat9v = 30;
@@ -108,12 +103,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.dispose();
   }
 
-  // Simulator Suhu Baterai HP agar terlihat bergerak Realtime
   void _startBatteryTempMock() {
     _phoneTempMockTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
       if (mounted) {
         setState(() {
-          // Bergerak naik turun +- 0.2 derajat secara acak
           phoneBatteryTemp += (DateTime.now().second % 2 == 0 ? 0.2 : -0.2);
         });
       }
@@ -244,7 +237,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
            if (Platform.isAndroid) { try { await device.requestMtu(512); } catch(e){} }
            discoverServices(device);
          } else if (state == BluetoothConnectionState.disconnected) {
-           if (mounted) setState(() { isConnected = false; txChar = null; rxChar = null; hotsideTemp = "--"; voltage = "--"; });
+           if (mounted) setState(() { isConnected = false; txChar = null; rxChar = null; hotsideTemp = "--"; voltage = "--"; isAiModeOn = false; });
            _showSnackBar("Koneksi Terputus ❌", color: Colors.redAccent);
          }
        });
@@ -294,25 +287,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void disconnectDevice() async => await targetDevice?.disconnect();
 
-  void parseIncomingData(String data) {
+  // ENGINE SINKRONISASI DATA ANTI-ERROR
+  void parseIncomingData(String rawData) {
     if (!mounted) return;
     try {
-      if (data.startsWith("TMP:")) {
-        setState(() => hotsideTemp = data.substring(4).trim().replaceAll(RegExp(r'\.0*'), '')); 
-        if(isCloudSyncing) _dbRef.child("telemetry/hotside_temp").set(hotsideTemp);
-      } else if (data.startsWith("VOL:")) {
-        setState(() => voltage = data.substring(4).trim());
-        if(isCloudSyncing) _dbRef.child("telemetry/voltage").set(voltage);
-      } else if (data.startsWith("RGB:")) {
-        setState(() => isRgbOn = data.substring(4).trim() == "1");
-      } else if (data.startsWith("AI:")) {
-        setState(() => isAiModeOn = data.substring(4).trim() == "1");
-      } else if (data.startsWith("BRV:")) {
-        setState(() => brightness = double.tryParse(data.substring(4).trim()) ?? 255);
-      } else if (data.startsWith("VER:")) {
-        setState(() => currentVersion = data.substring(4).trim());
-      }
-    } catch (e) {}
+      // Pecah data berdasarkan garis baru (\n) karena BLE sering menumpuk pesan
+      List<String> lines = rawData.split(RegExp(r'\r?\n'));
+      
+      setState(() {
+        for (String data in lines) {
+          data = data.trim();
+          if (data.isEmpty || !data.contains(":")) continue;
+          
+          String key = data.substring(0, data.indexOf(":"));
+          String value = data.substring(data.indexOf(":") + 1).trim();
+
+          switch (key) {
+            case "TMP":
+              hotsideTemp = value;
+              if (isCloudSyncing) _dbRef.child("telemetry/hotside_temp").set(hotsideTemp);
+              break;
+            case "VOL":
+              voltage = value;
+              if (isCloudSyncing) _dbRef.child("telemetry/voltage").set(voltage);
+              break;
+            case "RGB":
+              isRgbOn = (value == "1");
+              break;
+            case "AI":
+              isAiModeOn = (value == "1");
+              break;
+            case "BRV":
+              brightness = double.tryParse(value) ?? 255;
+              break;
+            case "VER":
+              currentVersion = value;
+              break;
+          }
+        }
+      });
+    } catch (e) {
+      debugPrint("Gagal Parse String: $e");
+    }
   }
 
   void sendCommand(String cmd) async {
@@ -332,7 +348,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
     _showSnackBar("Pengaturan Suhu Direset ke Default", color: Colors.green);
   }
-
 
   // --- UI COMPONENTS BUILDING ---
   @override
@@ -364,23 +379,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildTopData(phoneBatteryTemp.toStringAsFixed(1), "°C", "Baterai Temperature", color: Colors.orangeAccent),
+                      // Indikator Suhu HP (Muncul -- jika tidak terkonek)
+                      _buildTopData(isConnected ? phoneBatteryTemp.toStringAsFixed(1) : "--", "°C", "Baterai Temperature", color: Colors.orangeAccent),
                       const SizedBox(height: 20),
-                      _buildTopData(hotsideTemp, "°C", "Hotside Temperature", color: Colors.cyanAccent),
+                      // Indikator Suhu ESP32
+                      _buildTopData(isConnected ? hotsideTemp : "--", "°C", "Hotside Temperature", color: Colors.cyanAccent),
                       const SizedBox(height: 20),
-                      _buildTopData(voltage.replaceAll('V',''), "V", "Indicator Voltase", color: Colors.blueAccent),
+                      // Indikator Voltase
+                      _buildTopData(isConnected ? voltage.replaceAll('V','') : "--", "V", "Indicator Voltase", color: Colors.blueAccent),
                       const SizedBox(height: 20),
-                      _buildTopData(isAiModeOn ? "ON" : "OFF", "", "AI Mode", color: isAiModeOn ? Colors.greenAccent : Colors.grey),
+                      // Indikator AI Mode
+                      _buildTopData(isConnected ? (isAiModeOn ? "ON" : "OFF") : "--", "", "AI Mode", color: isAiModeOn ? Colors.greenAccent : Colors.grey),
                     ],
                   ),
                 ),
-                // GAMBAR PRODUK (Lebih Full & Besar)
+                // GAMBAR PRODUK (Digeser ke Kiri & Diskalakan Aman)
                 Expanded(
                   flex: 6,
                   child: Transform.translate(
-                    offset: const Offset(15, -10), // Geser sedikit ke kanan agar tidak terlalu padat
+                    offset: const Offset(-20, -10), // Digeser ke Kiri agar tidak terpotong
                     child: Transform.scale(
-                      scale: 1.45, // Memperbesar gambar produk tanpa menabrak batas container
+                      scale: 1.3, // Proporsional agar gambar lebih besar tapi aman
                       child: Image.asset(
                         'assets/cooler.png', 
                         fit: BoxFit.contain,
@@ -393,7 +412,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           
-          // --- BOTTOM SECTION (White Rounded Menu) ---
+          // --- BOTTOM SECTION (White Rounded Menu - FIXED & NOT SCROLLABLE) ---
           Expanded(
             child: Container(
               width: double.infinity,
@@ -404,28 +423,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               child: Column(
                 children: [
-                  // TAB NAVIGASI ATAS
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _buildTabMenu("Voltage", 0),
-                        _buildTabMenu("AI Mode", 1),
-                        _buildTabMenu("RGB Led", 2),
-                        _buildTabMenu("Temp Setting", 3),
-                      ],
-                    ),
+                  // TAB NAVIGASI ATAS (FIXED POSITION)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      Expanded(child: _buildTabMenu("Voltage", 0)),
+                      Expanded(child: _buildTabMenu("AI Mode", 1)),
+                      Expanded(child: _buildTabMenu("RGB Led", 2)),
+                      Expanded(child: _buildTabMenu("Temp Set", 3)),
+                    ],
                   ),
-                  const SizedBox(height: 5),
+                  const SizedBox(height: 10),
                   const Divider(color: Colors.black12, thickness: 1.5),
                   
-                  // ISI KONTEN MENU BAWAH
+                  // ISI KONTEN MENU BAWAH (FIXED HEIGHT)
                   Expanded(
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 300),
-                      child: _buildMenuContent(),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: _buildMenuContent(), // Tanpa animasi agar terasa solid/fixed
                     ),
                   ),
                 ],
@@ -466,19 +481,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return GestureDetector(
       onTap: () => setState(() => selectedMenuIndex = index),
       child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 5),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
           color: isSelected ? Colors.black : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
         ),
-        child: Text(
-          title, 
-          style: TextStyle(
-            color: isSelected ? Colors.white : Colors.black54, 
-            fontWeight: FontWeight.bold, 
-            fontSize: 13
-          )
+        child: Center(
+          child: Text(
+            title, 
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: isSelected ? Colors.white : Colors.black54, 
+              fontWeight: FontWeight.bold, 
+              fontSize: 12
+            )
+          ),
         ),
       ),
     );
@@ -542,9 +560,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // CONTENT 1: AI MENU
   Widget _buildAiMenu() {
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+    return Column(
       children: [
         // Master AI Toggle
         ListTile(
@@ -553,7 +569,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           trailing: Switch(
             value: isAiModeOn,
             activeColor: Colors.blueAccent,
-            onChanged: (val) => sendCommand("MODEAI"),
+            onChanged: (val) {
+              if (val) {
+                // LOGIKA BARU: Jika diaktifkan, paksa reset ke 5V dulu sebelum Mode AI on
+                sendCommand("5V");
+                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("MODEAI"));
+              } else {
+                sendCommand("MODEAI"); // Matikan
+              }
+            },
           ),
         ),
         const Divider(),
@@ -610,7 +634,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               color: isRgbOn ? Colors.black : Colors.white,
               shape: BoxShape.circle,
               border: Border.all(color: isRgbOn ? Colors.black : Colors.grey.shade300, width: 2),
-              boxShadow: isRgbOn ? [BoxShadow(color: Colors.black26, blurRadius: 15)] : [],
+              boxShadow: isRgbOn ? [const BoxShadow(color: Colors.black26, blurRadius: 15)] : [],
             ),
             child: Icon(Icons.power_settings_new, color: isRgbOn ? Colors.white : Colors.grey, size: 40),
           ),
@@ -665,9 +689,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // CONTENT 3: TEMP SETTING MENU
   Widget _buildTempSettingMenu() {
+    if (isAiModeOn) {
+      return Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: const [
+          Icon(Icons.lock_outline, color: Colors.redAccent, size: 50),
+          SizedBox(height: 10),
+          Text("Settings Locked by AI Mode", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+        ],
+      );
+    }
+
     return ListView(
       physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 10),
       children: [
         _tempAdjusterTile("Coldside / Overheat Limit", limitHot, (v) => setState(()=> limitHot = v), "°C"),
         const Divider(),
@@ -705,18 +739,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
           Row(
             children: [
-              IconButton(
-                icon: const Icon(Icons.remove_circle_outline, color: Colors.black54),
-                onPressed: () => onChanged(value - 1),
-              ),
-              SizedBox(
-                width: 45,
-                child: Center(child: Text("$value$unit", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Colors.blueAccent))),
-              ),
-              IconButton(
-                icon: const Icon(Icons.add_circle_outline, color: Colors.black54),
-                onPressed: () => onChanged(value + 1),
-              ),
+              IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.black54), onPressed: () => onChanged(value - 1)),
+              SizedBox(width: 45, child: Center(child: Text("$value$unit", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Colors.blueAccent)))),
+              IconButton(icon: const Icon(Icons.add_circle_outline, color: Colors.black54), onPressed: () => onChanged(value + 1)),
             ],
           )
         ],
