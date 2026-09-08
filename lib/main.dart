@@ -66,7 +66,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String currentVersion = "V?";
   
   bool isCloudSyncing = false;
-  late final DatabaseReference _dbRef;
+  DatabaseReference? _dbRef;
   final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
   int selectedMenuIndex = 0; 
@@ -85,9 +85,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _dbRef = FirebaseDatabase.instanceFor(app: Firebase.app(), databaseURL: firebaseDbUrl).ref();
+    _initFirebaseSafe();
     _requestPermissions();
-    _initFirebaseMonitoring();
     _startBatteryTempMock();
   }
 
@@ -98,6 +97,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     targetDevice?.disconnect();
     _phoneTempMockTimer?.cancel();
     super.dispose();
+  }
+
+  void _initFirebaseSafe() {
+    try {
+      _dbRef = FirebaseDatabase.instanceFor(
+        app: Firebase.app(), 
+        databaseURL: firebaseDbUrl
+      ).ref();
+      _initFirebaseMonitoring();
+    } catch (e) {
+      debugPrint("Firebase Database Unavailable: $e");
+    }
   }
 
   void _startBatteryTempMock() {
@@ -117,6 +128,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _initFirebaseMonitoring() {
+    if (_dbRef == null) return;
     FirebaseDatabase.instanceFor(app: Firebase.app(), databaseURL: firebaseDbUrl)
       .ref(".info/connected").onValue.listen((event) {
         if (mounted) {
@@ -237,6 +249,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
              setState(() { 
                isConnected = false; txChar = null; rxChar = null; 
                hotsideTemp = "--"; voltage = "--"; isAiModeOn = false; 
+               currentVersion = "V?";
                _bleBuffer = ""; 
              });
            }
@@ -307,11 +320,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
           setState(() {
             if (key == "TMP") {
-              hotsideTemp = value.replaceAll(RegExp(r'\.0*'), '');
-              if (isCloudSyncing) _dbRef.child("telemetry/hotside_temp").set(hotsideTemp);
+              hotsideTemp = value.replaceAll(RegExp(r'\.0+$'), '');
+              if (isCloudSyncing && _dbRef != null) {
+                _dbRef!.child("telemetry/hotside_temp").set(hotsideTemp);
+              }
             } else if (key == "VOL") {
               voltage = value;
-              if (isCloudSyncing) _dbRef.child("telemetry/voltage").set(voltage);
+              if (isCloudSyncing && _dbRef != null) {
+                _dbRef!.child("telemetry/voltage").set(voltage);
+              }
             } else if (key == "RGB") {
               isRgbOn = (value == "1");
             } else if (key == "AI") {
@@ -337,7 +354,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // --- SMART FIRMWARE MENU ---
   void _openFirmwareUpdateMenu() {
     if (!isConnected) {
       _showSnackBar("Connect to Horizon Cooler first!", color: Colors.orangeAccent);
@@ -393,7 +409,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         actions: [ 
           IconButton(
             icon: const Icon(Icons.settings, color: Colors.white), 
-            onPressed: _openFirmwareUpdateMenu, // TOMBOL MENU PENGATURAN KANAN ATAS
+            onPressed: _openFirmwareUpdateMenu, 
           ), 
         ],
       ),
@@ -530,359 +546,4 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildVoltageMenu() {
     return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        if (isAiModeOn) ...[
-          const Icon(Icons.lock_outline, color: Colors.redAccent, size: 50),
-          const SizedBox(height: 10),
-          const Text("Voltage Locked by AI Mode", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 20),
-        ],
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            _voltButton("5V"),
-            _voltButton("9V"),
-            _voltButton("12V"),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _voltButton(String v) {
-    bool isActive = voltage == v;
-    return Opacity(
-      opacity: isAiModeOn ? 0.4 : 1.0,
-      child: InkWell(
-        onTap: isAiModeOn ? null : () => sendCommand(v),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          width: 80, height: 80,
-          decoration: BoxDecoration(
-            color: isActive ? Colors.black : Colors.white,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: isActive ? Colors.black : Colors.grey.shade300, width: 2),
-            boxShadow: isActive ? [const BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))] : [],
-          ),
-          child: Center(
-            child: Text(v, style: TextStyle(color: isActive ? Colors.white : Colors.black87, fontSize: 22, fontWeight: FontWeight.w900)),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAiMenu() {
-    return Column(
-      children: [
-        ListTile(
-          title: const Text("Master AI Switch", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          subtitle: const Text("Turn AI control ON or OFF"),
-          trailing: Switch(
-            value: isAiModeOn,
-            activeColor: Colors.blueAccent,
-            onChanged: (val) {
-              setState(() => isAiModeOn = val);
-              sendCommand("5V");
-              if (val) {
-                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("AION"));
-              } else {
-                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("AIOFF"));
-              }
-            },
-          ),
-        ),
-        const Divider(),
-        _aiOptionTile(0, "Overheat Protection", "Protect cooler hotside from overheating."),
-        _aiOptionTile(1, "Overheat + Battery Protection", "Smart voltage scaling based on phone temp."),
-      ],
-    );
-  }
-
-  Widget _aiOptionTile(int index, String title, String sub) {
-    bool isSelected = aiModeType == index;
-    return InkWell(
-      onTap: () => setState(() => aiModeType = index),
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        padding: const EdgeInsets.all(15),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.blue.withOpacity(0.1) : Colors.white,
-          border: Border.all(color: isSelected ? Colors.blueAccent : Colors.grey.shade300, width: 2),
-          borderRadius: BorderRadius.circular(15)
-        ),
-        child: Row(
-          children: [
-            Icon(isSelected ? Icons.check_circle : Icons.circle_outlined, color: isSelected ? Colors.blueAccent : Colors.grey),
-            const SizedBox(width: 15),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                  Text(sub, style: TextStyle(color: Colors.grey.shade600, fontSize: 11)),
-                ],
-              ),
-            )
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRgbMenu() {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        InkWell(
-          onTap: () => sendCommand("RGBTOGGLE"),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: isRgbOn ? Colors.black : Colors.white,
-              shape: BoxShape.circle,
-              border: Border.all(color: isRgbOn ? Colors.black : Colors.grey.shade300, width: 2),
-              boxShadow: isRgbOn ? [const BoxShadow(color: Colors.black26, blurRadius: 15)] : [],
-            ),
-            child: Icon(Icons.power_settings_new, color: isRgbOn ? Colors.white : Colors.grey, size: 40),
-          ),
-        ),
-        const SizedBox(height: 25),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back_ios, color: Colors.black87),
-              onPressed: () { 
-                setState(() { if(rgbModeNumber > 1) rgbModeNumber--; });
-                sendCommand("RGBPREV");
-              },
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 10),
-              decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(15)),
-              child: Text("Mode $rgbModeNumber", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            ),
-            IconButton(
-              icon: const Icon(Icons.arrow_forward_ios, color: Colors.black87),
-              onPressed: () { 
-                setState(() { rgbModeNumber++; });
-                sendCommand("RGBNEXT");
-              },
-            ),
-          ],
-        ),
-        const SizedBox(height: 25),
-        Row(
-          children: [
-            const Icon(Icons.brightness_low, color: Colors.grey),
-            Expanded(
-              child: Slider(
-                value: brightness, min: 1, max: 255, activeColor: Colors.black, inactiveColor: Colors.grey.shade300,
-                onChangeEnd: (val) => sendCommand("BR:${val.toInt()}"),
-                onChanged: (val) => setState(() => brightness = val),
-              ),
-            ),
-            Text("${(brightness / 255 * 100).toInt()}%", style: const TextStyle(fontWeight: FontWeight.bold)),
-          ],
-        )
-      ],
-    );
-  }
-
-  Widget _buildTempSettingMenu() {
-    if (isAiModeOn) {
-      return Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: const [
-          Icon(Icons.lock_outline, color: Colors.redAccent, size: 50),
-          SizedBox(height: 10),
-          Text("Settings Locked by AI Mode", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-        ],
-      );
-    }
-
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      children: [
-        _tempAdjusterTile("Coldside / Overheat Limit", limitHot, (v) => setState(()=> limitHot = v), "°C"),
-        const Divider(),
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 8.0),
-          child: Text("Battery Temperature Limits", style: TextStyle(fontWeight: FontWeight.w900, color: Colors.black54)),
-        ),
-        _tempAdjusterTile("5V Limit (Drop if <)", limitBat5v, (v) => setState(()=> limitBat5v = v), "°C"),
-        _tempAdjusterTile("9V Limit (Normal)", limitBat9v, (v) => setState(()=> limitBat9v = v), "°C"),
-        _tempAdjusterTile("12V Limit (Boost if >)", limitBat12v, (v) => setState(()=> limitBat12v = v), "°C"),
-        
-        const SizedBox(height: 20),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent.withOpacity(0.1), foregroundColor: Colors.red, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 12)),
-          onPressed: resetTempSettings, 
-          icon: const Icon(Icons.restore), 
-          label: const Text("Reset to Default Settings", style: TextStyle(fontWeight: FontWeight.bold)),
-        ),
-        const SizedBox(height: 20),
-      ],
-    );
-  }
-
-  Widget _tempAdjusterTile(String label, int value, Function(int) onChanged, String unit) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
-          Row(
-            children: [
-              IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.black54), onPressed: () => onChanged(value - 1)),
-              SizedBox(width: 45, child: Center(child: Text("$value$unit", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Colors.blueAccent)))),
-              IconButton(icon: const Icon(Icons.add_circle_outline, color: Colors.black54), onPressed: () => onChanged(value + 1)),
-            ],
-          )
-        ],
-      ),
-    );
-  }
-}
-
-// =========================================================================
-// WIDGET KHUSUS: DIALOG CEK & UPDATE FIRMWARE ESP32
-// =========================================================================
-class FirmwareUpdateDialog extends StatefulWidget {
-  final String currentVersion;
-  final DatabaseReference dbRef;
-  final Function(String, String, String) onUpdateTriggered;
-
-  const FirmwareUpdateDialog({
-    super.key,
-    required this.currentVersion,
-    required this.dbRef,
-    required this.onUpdateTriggered,
-  });
-
-  @override
-  State<FirmwareUpdateDialog> createState() => _FirmwareUpdateDialogState();
-}
-
-class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
-  bool isChecking = true;
-  String latestVersion = "";
-  String fwUrl = "";
-  bool hasUpdate = false;
-
-  TextEditingController ssidCtrl = TextEditingController();
-  TextEditingController passCtrl = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    _loadSavedCredentials();
-    _checkFirebaseForUpdate();
-  }
-
-  Future<void> _loadSavedCredentials() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    setState(() {
-      ssidCtrl.text = prefs.getString("saved_ssid") ?? "";
-      passCtrl.text = prefs.getString("saved_pass") ?? "";
-    });
-  }
-
-  Future<void> _checkFirebaseForUpdate() async {
-    try {
-      final snapshot = await widget.dbRef.child("firmware_update").get();
-      if (snapshot.exists) {
-        final data = Map<String, dynamic>.from(snapshot.value as Map);
-        latestVersion = data['version'] ?? widget.currentVersion;
-        fwUrl = data['url'] ?? "";
-      } else {
-        latestVersion = widget.currentVersion;
-      }
-    } catch (e) {
-      latestVersion = widget.currentVersion;
-    }
-
-    if (mounted) {
-      setState(() {
-        isChecking = false;
-        hasUpdate = (latestVersion != widget.currentVersion && latestVersion.isNotEmpty && fwUrl.isNotEmpty);
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: const Color(0xFF1E202B),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      title: const Text("Firmware Settings", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-      content: isChecking
-          ? const SizedBox(
-              height: 100,
-              child: Center(child: CircularProgressIndicator(color: Colors.blueAccent)),
-            )
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("Current Firmware: ${widget.currentVersion}", style: const TextStyle(color: Colors.white70)),
-                const SizedBox(height: 8),
-                Text("Latest Firmware: $latestVersion", style: const TextStyle(color: Colors.white70)),
-                const SizedBox(height: 20),
-                if (!hasUpdate)
-                  const Center(
-                    child: Text("System is Up to Date 🚀", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 16)),
-                  )
-                else ...[
-                  const Text("New Firmware Available!", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 15),
-                  TextField(
-                    controller: ssidCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      labelText: "WiFi SSID",
-                      labelStyle: TextStyle(color: Colors.grey),
-                      prefixIcon: Icon(Icons.wifi, color: Colors.blueAccent),
-                      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
-                    ),
-                  ),
-                  TextField(
-                    controller: passCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    obscureText: true,
-                    decoration: const InputDecoration(
-                      labelText: "Password",
-                      labelStyle: TextStyle(color: Colors.grey),
-                      prefixIcon: Icon(Icons.lock, color: Colors.blueAccent),
-                      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text("Close", style: TextStyle(color: Colors.grey)),
-        ),
-        if (hasUpdate && !isChecking)
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-            onPressed: () async {
-              SharedPreferences prefs = await SharedPreferences.getInstance();
-              prefs.setString("saved_ssid", ssidCtrl.text);
-              prefs.setString("saved_pass", passCtrl.text);
-              
-              widget.onUpdateTriggered(ssidCtrl.text, passCtrl.text, fwUrl);
-              Navigator.pop(context);
-            },
-            child: const Text("Update Firmware", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-      ],
-    );
-  }
-}
+      mainAxisAlignment: MainAxisAlign
