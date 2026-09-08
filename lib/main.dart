@@ -45,7 +45,6 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // --- BLUETOOTH & CLOUD VARIABLES ---
   BluetoothDevice? targetDevice;
   BluetoothCharacteristic? txChar;
   BluetoothCharacteristic? rxChar;
@@ -59,7 +58,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final String charRxUUID  = "b2c3d4e5-f6a7-4b5c-8d9e-1f2a3b4c5d6e"; 
   final String charTxUUID  = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
 
-  // --- DATA ALAT & STATUS ---
   String hotsideTemp = "--"; 
   String voltage = "--";
   bool isRgbOn = false;
@@ -71,7 +69,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late final DatabaseReference _dbRef;
   final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
-  // --- MENU & SETTINGS VARIABLES ---
   int selectedMenuIndex = 0; 
   
   double phoneBatteryTemp = 32.5; 
@@ -107,7 +104,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _startBatteryTempMock() {
     _phoneTempMockTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (mounted && isConnected) {
+      if (mounted) {
         setState(() {
           phoneBatteryTemp += (DateTime.now().second % 2 == 0 ? 0.2 : -0.2);
         });
@@ -147,7 +144,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- BLUETOOTH CORE ---
   void showBluetoothMenu() {
     showModalBottomSheet(
       context: context,
@@ -353,7 +349,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _showSnackBar("Settings Reset to Default", color: Colors.green);
   }
 
-  // --- UI COMPONENTS BUILDING ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -371,7 +366,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       body: Column(
         children: [
-          // --- TOP SECTION (Telemetry & Image) ---
           Padding(
             padding: const EdgeInsets.only(left: 20, right: 10, top: 10, bottom: 20),
             child: Row(
@@ -410,7 +404,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           
-          // --- BOTTOM SECTION (White Rounded Menu) ---
           Expanded(
             child: Container(
               width: double.infinity,
@@ -502,7 +495,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // CONTENT 0: VOLTAGE
   Widget _buildVoltageMenu() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -548,7 +540,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // CONTENT 1: AI MENU
   Widget _buildAiMenu() {
     return Column(
       children: [
@@ -560,11 +551,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             activeColor: Colors.blueAccent,
             onChanged: (val) {
               setState(() => isAiModeOn = val);
-              // Langsung kirim perintah, ESP32 akan menghandle reset 5V di tingkat hardware
+              sendCommand("5V");
               if (val) {
-                sendCommand("AION");
+                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("AION"));
               } else {
-                sendCommand("AIOFF");
+                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("AIOFF"));
               }
             },
           ),
@@ -607,7 +598,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // CONTENT 2: RGB LED
   Widget _buildRgbMenu() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -669,7 +659,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // CONTENT 3: TEMP SETTING
   Widget _buildTempSettingMenu() {
     if (isAiModeOn) {
       return Column(
