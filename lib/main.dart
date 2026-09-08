@@ -117,6 +117,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         setState(() {
           phoneBatteryTemp += (DateTime.now().second % 2 == 0 ? 0.2 : -0.2);
         });
+        if (isCloudSyncing && _dbRef != null) {
+          _dbRef!.child("telemetry/battery_temp").set(phoneBatteryTemp.toStringAsFixed(1));
+        }
       }
     });
   }
@@ -359,6 +362,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _showSnackBar("Connect to Horizon Cooler first!", color: Colors.orangeAccent);
       return;
     }
+    sendCommand("SYNC"); 
     showDialog(
       context: context,
       builder: (context) {
@@ -818,6 +822,14 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
     super.initState();
     _loadSavedCredentials();
     _checkFirebaseForUpdate();
+  }
+
+  @override
+  void didUpdateWidget(covariant FirmwareUpdateDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentVersion != widget.currentVersion) {
+      _checkFirebaseForUpdate();
+    }
   }
 
   @override
