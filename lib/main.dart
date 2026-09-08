@@ -60,7 +60,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final String charTxUUID  = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
 
   String hotsideTemp = "--"; 
-  String voltage = "5V";
+  String voltage = "--";
   bool isRgbOn = true;
   bool isAiModeOn = false;
   double brightness = 255;
@@ -81,7 +81,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int limitBat9v = 30;
   int limitBat12v = 35;
 
-  String _bleRawStream = "";
+  String _incomingBuffer = "";
   static const platformChannel = MethodChannel('horizon_cooler/battery_temp');
 
   @override
@@ -89,6 +89,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     _initFirebaseSafe();
     _requestPermissions();
+    _fetchBatteryTemperature();
     _startRealtimeBatteryTempReader();
   }
 
@@ -113,20 +114,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _fetchBatteryTemperature() async {
+    try {
+      final double nativeTemp = await platformChannel.invokeMethod('getBatteryTemperature');
+      if (mounted && nativeTemp > 0.0) {
+        setState(() {
+          phoneBatteryTemp = nativeTemp;
+        });
+      }
+    } catch (e) {
+      debugPrint("Direct battery fetch error: $e");
+    }
+  }
+
   void _startRealtimeBatteryTempReader() {
     _batteryTempTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-      try {
-        final double nativeTemp = await platformChannel.invokeMethod('getBatteryTemperature');
-        if (mounted && nativeTemp > 0.0) {
-          setState(() {
-            phoneBatteryTemp = nativeTemp;
-          });
-          if (isCloudSyncing && _dbRef != null) {
-            _dbRef!.child("telemetry/battery_temp").set(phoneBatteryTemp.toStringAsFixed(1));
-          }
-        }
-      } catch (e) {
-        debugPrint("Error reading native battery temp: $e");
+      await _fetchBatteryTemperature();
+      if (isCloudSyncing && _dbRef != null && phoneBatteryTemp > 0.0) {
+        _dbRef!.child("telemetry/battery_temp").set(phoneBatteryTemp.toStringAsFixed(1));
       }
     });
   }
@@ -260,7 +265,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
        await FlutterBluePlus.stopScan();
        if (device.isConnected) {
          await device.disconnect();
-         await Future.delayed(const Duration(milliseconds: 500));
+         await Future.delayed(const Duration(milliseconds: 300));
        }
        
        targetDevice = device;
@@ -269,16 +274,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
        connectionSubscription = device.connectionState.listen((state) async {
          if (state == BluetoothConnectionState.connected) {
            if (mounted) setState(() => isConnected = true);
-           _showSnackBar("Connected! Synchronizing...", color: Colors.green);
            if (Platform.isAndroid) { try { await device.requestMtu(512); } catch(e){} }
            discoverServices(device);
          } else if (state == BluetoothConnectionState.disconnected) {
            if (mounted) {
              setState(() { 
                isConnected = false; txChar = null; rxChar = null; 
-               hotsideTemp = "--"; voltage = "5V"; isAiModeOn = false; 
+               hotsideTemp = "--"; voltage = "--"; isAiModeOn = false; 
                currentVersion = "V?";
-               _bleRawStream = ""; 
+               _incomingBuffer = ""; 
              });
            }
            _showSnackBar("Connection Lost", color: Colors.redAccent);
@@ -293,7 +297,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void discoverServices(BluetoothDevice device) async {
     try {
-      await Future.delayed(const Duration(milliseconds: 800));
+      await Future.delayed(const Duration(milliseconds: 600));
       List<BluetoothService> services = await device.discoverServices();
       bool foundRxTx = false;
 
@@ -305,7 +309,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               await txChar!.setNotifyValue(true);
               dataSubscription?.cancel();
               dataSubscription = txChar!.lastValueStream.listen((val) {
-                 if (val.isNotEmpty) parseIncomingStream(utf8.decode(val));
+                 if (val.isNotEmpty) parseIncomingData(utf8.decode(val));
               });
               foundRxTx = true;
             }
@@ -318,65 +322,59 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
       
       if (foundRxTx && rxChar != null) {
-         await Future.delayed(const Duration(milliseconds: 300));
+         await Future.delayed(const Duration(milliseconds: 200));
          sendCommand("SYNC"); 
       } else {
          _showSnackBar("UUID Mismatch!", color: Colors.redAccent);
          await device.disconnect(); 
       }
-    } catch (e) { debugPrint("Discovery Error"); }
+    } catch (e) { debugPrint("Discovery Error: $e"); }
   }
 
   void disconnectDevice() async => await targetDevice?.disconnect();
 
-  void parseIncomingStream(String incoming) {
+  void parseIncomingData(String incoming) {
     if (!mounted) return;
     try {
-      _bleRawStream += incoming;
+      _incomingBuffer += incoming;
 
-      // 1. Tangani Mode Sinkronisasi Berpagar (Frame Sync)
-      while (_bleRawStream.contains("<SYNC_START>") && _bleRawStream.contains("<SYNC_END>")) {
-        int startIdx = _bleRawStream.indexOf("<SYNC_START>");
-        int endIdx = _bleRawStream.indexOf("<SYNC_END>");
+      // 1. Tangani Frame Sync Berpagar (TAMPIL BERSAMAAN)
+      if (_incomingBuffer.contains("<SYNC_START>") && _incomingBuffer.contains("<SYNC_END>")) {
+        int start = _incomingBuffer.indexOf("<SYNC_START>");
+        int end = _incomingBuffer.indexOf("<SYNC_END>");
 
-        if (startIdx < endIdx) {
-          String payload = _bleRawStream.substring(startIdx + 12, endIdx);
-          _bleRawStream = _bleRawStream.substring(endIdx + 10);
+        if (start < end) {
+          String payload = _incomingBuffer.substring(start + 12, end);
+          _incomingBuffer = _incomingBuffer.substring(end + 10);
 
           List<String> lines = payload.split('\n');
-          for (String line in lines) {
-            _applyKeyValue(line.trim());
+          for (String l in lines) {
+            _updateField(l.trim());
           }
-          setState(() {}); // Render seluruh nilai serentak
-        } else {
-          _bleRawStream = _bleRawStream.substring(startIdx);
-          break;
+          // SATU KALI setState setelah seluruh parameter tuntas terbaca
+          setState(() {});
+          return;
         }
       }
 
-      // 2. Tangani Delta Updates Satuan
-      while (_bleRawStream.contains('\n')) {
-        int nlIndex = _bleRawStream.indexOf('\n');
-        String singleLine = _bleRawStream.substring(0, nlIndex).trim();
-        _bleRawStream = _bleRawStream.substring(nlIndex + 1);
+      // 2. Tangani Update Nilai Tunggal Setelah Sinkronisasi Selesai
+      if (!_incomingBuffer.contains("<SYNC_START>")) {
+        while (_incomingBuffer.contains('\n')) {
+          int nl = _incomingBuffer.indexOf('\n');
+          String line = _incomingBuffer.substring(0, nl).trim();
+          _incomingBuffer = _incomingBuffer.substring(nl + 1);
 
-        if (singleLine.contains("<SYNC_START>")) {
-          _bleRawStream = "<SYNC_START>\n" + _bleRawStream;
-          break;
-        }
-
-        if (singleLine.isNotEmpty && singleLine.contains(":")) {
-          if (_applyKeyValue(singleLine)) {
+          if (line.isNotEmpty && _updateField(line)) {
             setState(() {});
           }
         }
       }
     } catch (e) {
-      debugPrint("Parser Stream Error: $e");
+      debugPrint("Parse stream error: $e");
     }
   }
 
-  bool _applyKeyValue(String line) {
+  bool _updateField(String line) {
     if (!line.contains(":")) return false;
     List<String> parts = line.split(':');
     if (parts.length < 2) return false;
@@ -447,10 +445,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _triggerCloudOTASequence(String ssid, String pass, String fwUrl) async {
     if (!isConnected) return;
-    sendCommand("OTAENTER"); await Future.delayed(const Duration(milliseconds: 600));
-    sendCommand("SSID:$ssid"); await Future.delayed(const Duration(milliseconds: 600));
-    sendCommand("PASS:$pass"); await Future.delayed(const Duration(milliseconds: 600));
-    sendCommand("URL:$fwUrl"); await Future.delayed(const Duration(milliseconds: 600));
+    sendCommand("OTAENTER"); await Future.delayed(const Duration(milliseconds: 500));
+    sendCommand("SSID:$ssid"); await Future.delayed(const Duration(milliseconds: 500));
+    sendCommand("PASS:$pass"); await Future.delayed(const Duration(milliseconds: 500));
+    sendCommand("URL:$fwUrl"); await Future.delayed(const Duration(milliseconds: 500));
     sendCommand("CLOUDOTA");
   }
 
@@ -500,7 +498,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildTopData(phoneBatteryTemp > 0 ? phoneBatteryTemp.toStringAsFixed(1) : "--", "°C", "Battery Temperature", color: Colors.orangeAccent),
+                      _buildTopData(phoneBatteryTemp > 0.0 ? phoneBatteryTemp.toStringAsFixed(1) : "--", "°C", "Battery Temperature", color: Colors.orangeAccent),
                       const SizedBox(height: 20),
                       _buildTopData(isConnected ? hotsideTemp : "--", "°C", "Hotside Temperature", color: Colors.cyanAccent),
                       const SizedBox(height: 20),
