@@ -107,7 +107,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _startBatteryTempMock() {
     _phoneTempMockTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (mounted) {
+      if (mounted && isConnected) {
         setState(() {
           phoneBatteryTemp += (DateTime.now().second % 2 == 0 ? 0.2 : -0.2);
         });
@@ -427,7 +427,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       Expanded(child: _buildTabMenu("Voltage", 0)),
                       Expanded(child: _buildTabMenu("AI Mode", 1)),
                       Expanded(child: _buildTabMenu("RGB Led", 2)),
-                      Expanded(child: _buildTabMenu("Temp Setting", 3)),
+                      Expanded(child: _buildTabMenu("Temp Set", 3)),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -560,12 +560,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             activeColor: Colors.blueAccent,
             onChanged: (val) {
               setState(() => isAiModeOn = val);
-              // LOGIKA KESELAMATAN: Memaksa 5V terlebih dahulu setiap AI dihidupkan/dimatikan
-              sendCommand("5V");
+              // Langsung kirim perintah, ESP32 akan menghandle reset 5V di tingkat hardware
               if (val) {
-                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("AION"));
+                sendCommand("AION");
               } else {
-                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("AIOFF"));
+                sendCommand("AIOFF");
               }
             },
           ),
