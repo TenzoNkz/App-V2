@@ -7,6 +7,9 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:open_filex/open_filex.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -45,6 +48,8 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  final int currentAppVersion = 1; 
+
   BluetoothDevice? targetDevice;
   BluetoothCharacteristic? txChar;
   BluetoothCharacteristic? rxChar;
@@ -70,10 +75,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
   int selectedMenuIndex = 0; 
-  
   double phoneBatteryTemp = 32.5; 
   Timer? _phoneTempMockTimer;
-
   int aiModeType = 0; 
   int rgbModeNumber = 1;
 
@@ -83,6 +86,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int limitBat12v = 35;
 
   String _bleBuffer = "";
+  
+  double downloadProgress = 0.0;
+  bool isDownloadingUpdate = false;
 
   @override
   void initState() {
@@ -91,6 +97,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _requestPermissions();
     _initFirebaseMonitoring();
     _startBatteryTempMock();
+    _checkForAppUpdates();
   }
 
   @override
@@ -102,9 +109,94 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.dispose();
   }
 
+  void _checkForAppUpdates() {
+    _dbRef.child("app_update").onValue.listen((event) {
+      if (event.snapshot.value != null && mounted) {
+        try {
+          final data = Map<String, dynamic>.from(event.snapshot.value as Map);
+          int serverVersion = data['version_code'] ?? 1;
+          String apkUrl = data['apk_url'] ?? "";
+
+          if (serverVersion > currentAppVersion && apkUrl.isNotEmpty && !isDownloadingUpdate) {
+            _showUpdateDialog(apkUrl, serverVersion);
+          }
+        } catch (e) { debugPrint("Update Check Error: $e"); }
+      }
+    });
+  }
+
+  void _showUpdateDialog(String url, int newVer) {
+    showDialog(
+      context: context,
+      barrierDismissible: false, 
+      builder: (context) {
+        return StatefulBuilder(builder: (context, setStateDialog) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E202B),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text("System Update Available", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text("New Horizon Cooler UI is ready. Updating is required for optimal performance.", style: TextStyle(color: Colors.grey, fontSize: 13)),
+                const SizedBox(height: 20),
+                if (isDownloadingUpdate) ...[
+                  LinearProgressIndicator(value: downloadProgress, backgroundColor: Colors.grey.shade800, color: Colors.blueAccent),
+                  const SizedBox(height: 10),
+                  Text("Downloading: ${(downloadProgress * 100).toStringAsFixed(0)}%", style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+                ]
+              ],
+            ),
+            actions: [
+              if (!isDownloadingUpdate)
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                  onPressed: () {
+                    setStateDialog(() => isDownloadingUpdate = true);
+                    _downloadAndInstallAPK(url, setStateDialog);
+                  },
+                  child: const Text("Download & Install", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                )
+            ],
+          );
+        });
+      }
+    );
+  }
+
+  Future<void> _downloadAndInstallAPK(String url, Function setStateDialog) async {
+    try {
+      if (Platform.isAndroid) await Permission.requestInstallPackages.request();
+
+      Directory? tempDir = await getExternalStorageDirectory();
+      String savePath = "${tempDir!.path}/horizon_update.apk";
+
+      Dio dio = Dio();
+      await dio.download(
+        url, 
+        savePath, 
+        onReceiveProgress: (received, total) {
+          if (total != -1) {
+            setStateDialog(() {
+              downloadProgress = received / total;
+            });
+          }
+        }
+      );
+
+      setStateDialog(() => isDownloadingUpdate = false);
+      Navigator.pop(context); 
+      OpenFilex.open(savePath); 
+      
+    } catch (e) {
+      setStateDialog(() => isDownloadingUpdate = false);
+      _showSnackBar("Update Failed: $e", color: Colors.redAccent);
+    }
+  }
+
   void _startBatteryTempMock() {
     _phoneTempMockTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (mounted) {
+      if (mounted && isConnected) {
         setState(() {
           phoneBatteryTemp += (DateTime.now().second % 2 == 0 ? 0.2 : -0.2);
         });
