@@ -203,18 +203,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   initialData: const [],
                   builder: (c, snapshot) {
                     final results = snapshot.data ?? [];
-                    if (results.isEmpty) return const Center(child: Text("Scanning for Horizon Cooler...", style: TextStyle(color: Colors.grey)));
-                    return ListView.builder(
-                      itemCount: results.length,
-                      itemBuilder: (context, index) {
-                        final r = results[index];
-                        String devName = r.device.platformName.isNotEmpty ? r.device.platformName : r.advertisementData.advName;
-                        if (devName.isEmpty) devName = "Unknown Device";
-                        bool isTarget = devName.toUpperCase().contains("HORIZON");
+                    // PENTING: Filter eksklusif hanya memunculkan perangkat bernama "HORIZON"
+                    final horizonDevices = results.where((r) {
+                      String devName = r.device.platformName.isNotEmpty ? r.device.platformName : r.advertisementData.advName;
+                      return devName.toUpperCase().contains("HORIZON");
+                    }).toList();
 
+                    if (horizonDevices.isEmpty) return const Center(child: Text("Scanning for Horizon Cooler...", style: TextStyle(color: Colors.grey)));
+                    
+                    return ListView.builder(
+                      itemCount: horizonDevices.length,
+                      itemBuilder: (context, index) {
+                        final r = horizonDevices[index];
+                        String devName = r.device.platformName.isNotEmpty ? r.device.platformName : r.advertisementData.advName;
+                        
                         return ListTile(
-                          leading: Icon(Icons.bluetooth, color: isTarget ? Colors.blueAccent : Colors.grey),
-                          title: Text(devName, style: TextStyle(color: isTarget ? Colors.white : Colors.grey[400], fontWeight: FontWeight.bold)),
+                          leading: const Icon(Icons.bluetooth, color: Colors.blueAccent),
+                          title: Text(devName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                           subtitle: Text(r.device.remoteId.toString(), style: const TextStyle(color: Colors.grey, fontSize: 11)),
                           onTap: () { Navigator.pop(context); connectToDevice(r.device); },
                         );
@@ -258,7 +263,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
            if (mounted) {
              setState(() { 
                isConnected = false; txChar = null; rxChar = null; 
-               hotsideTemp = "--"; voltage = "--"; isAiModeOn = false; 
+               hotsideTemp = "--"; voltage = "5V"; isAiModeOn = false; 
                currentVersion = "V?";
                _bleBuffer = ""; 
              });
@@ -328,7 +333,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           String key = parts[0].trim();
           String value = parts[1].trim();
 
-          // Mengumpulkan data tanpa setState satuan, diproses batch di akhir blok buffer
           setState(() {
             if (key == "TMP") {
               hotsideTemp = value.replaceAll(RegExp(r'\.0+$'), '');
