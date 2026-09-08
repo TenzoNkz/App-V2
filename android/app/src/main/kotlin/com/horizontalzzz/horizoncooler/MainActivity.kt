@@ -15,24 +15,17 @@ class MainActivity: FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "getBatteryTemperature") {
-                val temp = getBatteryTemperature()
-                result.success(temp.toDouble())
+                val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                val rawTemp = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
+                result.success(rawTemp / 10.0)
             } else if (call.method == "enableLocation") {
-                // MEMAKSA MUNCULNYA HALAMAN AKTIVASI GPS JIKA LOKASI MATI
+                // Memaksa lempar ke menu pengaturan GPS jika Lokasi mati
                 val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
+                startActivity(intent)
                 result.success(true)
             } else {
                 result.notImplemented()
             }
         }
-    }
-
-    private fun getBatteryTemperature(): Float {
-        // Menggunakan applicationContext agar tidak pernah bocor/hilang
-        val intent = context.applicationContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val rawTemp = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
-        return if (rawTemp != -1) rawTemp / 10.0f else 0.0f
     }
 }
