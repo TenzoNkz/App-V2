@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -59,21 +60,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final String charTxUUID  = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
 
   String hotsideTemp = "--"; 
-  String voltage = "--";
-  bool isRgbOn = false;
+  String voltage = "5V";
+  bool isRgbOn = true;
   bool isAiModeOn = false;
   double brightness = 255;
   String currentVersion = "V?";
+  int rgbModeIndex = 1;
   
   bool isCloudSyncing = false;
   DatabaseReference? _dbRef;
   final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
   int selectedMenuIndex = 0; 
-  double phoneBatteryTemp = 32.5; 
-  Timer? _phoneTempMockTimer;
+  double phoneBatteryTemp = 0.0; 
+  Timer? _batteryTempTimer;
   int aiModeType = 0; 
-  int rgbModeNumber = 1;
 
   int limitHot = 45;
   int limitBat5v = 25;
@@ -81,13 +82,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int limitBat12v = 35;
 
   String _bleBuffer = "";
+  static const platformChannel = MethodChannel('horizon_cooler/battery_temp');
 
   @override
   void initState() {
     super.initState();
     _initFirebaseSafe();
     _requestPermissions();
-    _startBatteryTempMock();
+    _startRealtimeBatteryTempReader();
   }
 
   @override
@@ -95,7 +97,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     connectionSubscription?.cancel();
     dataSubscription?.cancel();
     targetDevice?.disconnect();
-    _phoneTempMockTimer?.cancel();
+    _batteryTempTimer?.cancel();
     super.dispose();
   }
 
@@ -111,15 +113,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  void _startBatteryTempMock() {
-    _phoneTempMockTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-      if (mounted && isConnected) {
-        setState(() {
-          phoneBatteryTemp += (DateTime.now().second % 2 == 0 ? 0.2 : -0.2);
-        });
-        if (isCloudSyncing && _dbRef != null) {
-          _dbRef!.child("telemetry/battery_temp").set(phoneBatteryTemp.toStringAsFixed(1));
+  void _startRealtimeBatteryTempReader() {
+    _batteryTempTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+      try {
+        final double nativeTemp = await platformChannel.invokeMethod('getBatteryTemperature');
+        if (mounted) {
+          setState(() {
+            phoneBatteryTemp = nativeTemp;
+          });
+          if (isCloudSyncing && _dbRef != null) {
+            _dbRef!.child("telemetry/battery_temp").set(phoneBatteryTemp.toStringAsFixed(1));
+          }
         }
+      } catch (e) {
+        debugPrint("Error reading native battery temp: $e");
       }
     });
   }
@@ -152,7 +159,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(10),
-        duration: const Duration(seconds: 3),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -293,7 +300,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
       
       if (foundRxTx && rxChar != null) {
-         await Future.delayed(const Duration(milliseconds: 500));
+         await Future.delayed(const Duration(milliseconds: 300));
          sendCommand("SYNC"); 
          _showSnackBar("Synchronized! System Ready! 🚀", color: Colors.blueAccent);
       } else {
@@ -321,6 +328,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           String key = parts[0].trim();
           String value = parts[1].trim();
 
+          // Mengumpulkan data tanpa setState satuan, diproses batch di akhir blok buffer
           setState(() {
             if (key == "TMP") {
               hotsideTemp = value.replaceAll(RegExp(r'\.0+$'), '');
@@ -340,6 +348,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
               brightness = double.tryParse(value) ?? 255;
             } else if (key == "VER") {
               currentVersion = value;
+            } else if (key == "MD") {
+              rgbModeIndex = (int.tryParse(value) ?? 0) + 1;
+            } else if (key == "LHT") {
+              limitHot = int.tryParse(value) ?? 45;
+            } else if (key == "LB5") {
+              limitBat5v = int.tryParse(value) ?? 25;
+            } else if (key == "LB9") {
+              limitBat9v = int.tryParse(value) ?? 30;
+            } else if (key == "LB12") {
+              limitBat12v = int.tryParse(value) ?? 35;
             }
           });
         }
@@ -394,6 +412,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       limitBat9v = 30;
       limitBat12v = 35;
     });
+    sendCommand("LHT:45");
+    sendCommand("LB5:25");
+    sendCommand("LB9:30");
+    sendCommand("LB12:35");
     _showSnackBar("Settings Reset to Default", color: Colors.green);
   }
 
@@ -429,7 +451,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildTopData(isConnected ? phoneBatteryTemp.toStringAsFixed(1) : "--", "°C", "Battery Temperature", color: Colors.orangeAccent),
+                      _buildTopData(phoneBatteryTemp > 0 ? phoneBatteryTemp.toStringAsFixed(1) : "--", "°C", "Battery Temperature", color: Colors.orangeAccent),
                       const SizedBox(height: 20),
                       _buildTopData(isConnected ? hotsideTemp : "--", "°C", "Hotside Temperature", color: Colors.cyanAccent),
                       const SizedBox(height: 20),
@@ -578,7 +600,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Opacity(
       opacity: isAiModeOn ? 0.4 : 1.0,
       child: InkWell(
-        onTap: isAiModeOn ? null : () => sendCommand(v),
+        onTap: isAiModeOn ? null : () {
+          setState(() => voltage = v);
+          sendCommand(v);
+        },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           width: 80,
@@ -615,11 +640,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             activeColor: Colors.blueAccent,
             onChanged: (val) {
               setState(() => isAiModeOn = val);
-              sendCommand("5V");
               if (val) {
-                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("AION"));
+                sendCommand("AION");
               } else {
-                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("AIOFF"));
+                sendCommand("AIOFF");
               }
             },
           ),
@@ -667,7 +691,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         InkWell(
-          onTap: () => sendCommand("RGBTOGGLE"),
+          onTap: () {
+            setState(() => isRgbOn = !isRgbOn);
+            sendCommand("RGBTOGGLE");
+          },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
             padding: const EdgeInsets.all(20),
@@ -687,23 +714,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
             IconButton(
               icon: const Icon(Icons.arrow_back_ios, color: Colors.black87),
               onPressed: () { 
-                setState(() { 
-                  if (rgbModeNumber > 1) rgbModeNumber--; 
-                });
                 sendCommand("RGBPREV");
               },
             ),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 10),
               decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(15)),
-              child: Text("Mode $rgbModeNumber", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              child: Text("Mode $rgbModeIndex", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             ),
             IconButton(
               icon: const Icon(Icons.arrow_forward_ios, color: Colors.black87),
               onPressed: () { 
-                setState(() { 
-                  rgbModeNumber++; 
-                });
                 sendCommand("RGBNEXT");
               },
             ),
@@ -746,15 +767,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return ListView(
       physics: const BouncingScrollPhysics(),
       children: [
-        _tempAdjusterTile("Coldside / Overheat Limit", limitHot, (v) => setState(() => limitHot = v), "°C"),
+        _tempAdjusterTile("Coldside / Overheat Limit", limitHot, (v) {
+          setState(() => limitHot = v);
+          sendCommand("LHT:$v");
+        }, "°C"),
         const Divider(),
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 8.0),
           child: Text("Battery Temperature Limits", style: TextStyle(fontWeight: FontWeight.w900, color: Colors.black54)),
         ),
-        _tempAdjusterTile("5V Limit (Drop if <)", limitBat5v, (v) => setState(() => limitBat5v = v), "°C"),
-        _tempAdjusterTile("9V Limit (Normal)", limitBat9v, (v) => setState(() => limitBat9v = v), "°C"),
-        _tempAdjusterTile("12V Limit (Boost if >)", limitBat12v, (v) => setState(() => limitBat12v = v), "°C"),
+        _tempAdjusterTile("5V Limit (Drop if <)", limitBat5v, (v) {
+          setState(() => limitBat5v = v);
+          sendCommand("LB5:$v");
+        }, "°C"),
+        _tempAdjusterTile("9V Limit (Normal)", limitBat9v, (v) {
+          setState(() => limitBat9v = v);
+          sendCommand("LB9:$v");
+        }, "°C"),
+        _tempAdjusterTile("12V Limit (Boost if >)", limitBat12v, (v) {
+          setState(() => limitBat12v = v);
+          sendCommand("LB12:$v");
+        }, "°C"),
         const SizedBox(height: 20),
         ElevatedButton.icon(
           style: ElevatedButton.styleFrom(
