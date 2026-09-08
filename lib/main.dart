@@ -7,9 +7,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:dio/dio.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:open_filex/open_filex.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,11 +45,6 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // ========================================================
-  // VERSI APLIKASI SAAT INI (Ubah angka ini saat update UI!)
-  // ========================================================
-  final int currentAppVersion = 1; 
-
   BluetoothDevice? targetDevice;
   BluetoothCharacteristic? txChar;
   BluetoothCharacteristic? rxChar;
@@ -89,9 +81,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int limitBat12v = 35;
 
   String _bleBuffer = "";
-  
-  double downloadProgress = 0.0;
-  bool isDownloadingUpdate = false;
 
   @override
   void initState() {
@@ -100,7 +89,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _requestPermissions();
     _initFirebaseMonitoring();
     _startBatteryTempMock();
-    _checkForAppUpdates();
   }
 
   @override
@@ -110,91 +98,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     targetDevice?.disconnect();
     _phoneTempMockTimer?.cancel();
     super.dispose();
-  }
-
-  void _checkForAppUpdates() {
-    _dbRef.child("app_update").onValue.listen((event) {
-      if (event.snapshot.value != null && mounted) {
-        try {
-          final data = Map<String, dynamic>.from(event.snapshot.value as Map);
-          int serverVersion = data['version_code'] ?? 1;
-          String apkUrl = data['apk_url'] ?? "";
-
-          if (serverVersion > currentAppVersion && apkUrl.isNotEmpty && !isDownloadingUpdate) {
-            _showUpdateDialog(apkUrl, serverVersion);
-          }
-        } catch (e) { debugPrint("Update Check Error: $e"); }
-      }
-    });
-  }
-
-  void _showUpdateDialog(String url, int newVer) {
-    showDialog(
-      context: context,
-      barrierDismissible: false, 
-      builder: (context) {
-        return StatefulBuilder(builder: (context, setStateDialog) {
-          return AlertDialog(
-            backgroundColor: const Color(0xFF1E202B),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: const Text("System Update Available", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text("New Horizon Cooler UI is ready. Updating is required for optimal performance.", style: TextStyle(color: Colors.grey, fontSize: 13)),
-                const SizedBox(height: 20),
-                if (isDownloadingUpdate) ...[
-                  LinearProgressIndicator(value: downloadProgress, backgroundColor: Colors.grey.shade800, color: Colors.blueAccent),
-                  const SizedBox(height: 10),
-                  Text("Downloading: ${(downloadProgress * 100).toStringAsFixed(0)}%", style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold)),
-                ]
-              ],
-            ),
-            actions: [
-              if (!isDownloadingUpdate)
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-                  onPressed: () {
-                    setStateDialog(() => isDownloadingUpdate = true);
-                    _downloadAndInstallAPK(url, setStateDialog);
-                  },
-                  child: const Text("Download & Install", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                )
-            ],
-          );
-        });
-      }
-    );
-  }
-
-  Future<void> _downloadAndInstallAPK(String url, Function setStateDialog) async {
-    try {
-      if (Platform.isAndroid) await Permission.requestInstallPackages.request();
-
-      Directory? tempDir = await getExternalStorageDirectory();
-      String savePath = "${tempDir!.path}/horizon_update.apk";
-
-      Dio dio = Dio();
-      await dio.download(
-        url, 
-        savePath, 
-        onReceiveProgress: (received, total) {
-          if (total != -1) {
-            setStateDialog(() {
-              downloadProgress = received / total;
-            });
-          }
-        }
-      );
-
-      setStateDialog(() => isDownloadingUpdate = false);
-      Navigator.pop(context); 
-      OpenFilex.open(savePath); 
-      
-    } catch (e) {
-      setStateDialog(() => isDownloadingUpdate = false);
-      _showSnackBar("Update Failed: $e", color: Colors.redAccent);
-    }
   }
 
   void _startBatteryTempMock() {
@@ -434,6 +337,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  // --- SMART FIRMWARE MENU ---
+  void _openFirmwareUpdateMenu() {
+    if (!isConnected) {
+      _showSnackBar("Connect to Horizon Cooler first!", color: Colors.orangeAccent);
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (context) {
+        return FirmwareUpdateDialog(
+          currentVersion: currentVersion,
+          dbRef: _dbRef,
+          onUpdateTriggered: (ssid, pass, url) {
+            _showSnackBar("Firmware Update Initiated!", color: Colors.purpleAccent);
+            _triggerCloudOTASequence(ssid, pass, url);
+          },
+        );
+      },
+    );
+  }
+
+  void _triggerCloudOTASequence(String ssid, String pass, String fwUrl) async {
+    if (!isConnected) return;
+    sendCommand("OTAENTER"); await Future.delayed(const Duration(milliseconds: 600));
+    sendCommand("SSID:$ssid"); await Future.delayed(const Duration(milliseconds: 600));
+    sendCommand("PASS:$pass"); await Future.delayed(const Duration(milliseconds: 600));
+    sendCommand("URL:$fwUrl"); await Future.delayed(const Duration(milliseconds: 600));
+    sendCommand("CLOUDOTA");
+  }
+
   void resetTempSettings() {
     setState(() {
       limitHot = 45;
@@ -457,7 +390,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           icon: Icon(isConnected ? Icons.bluetooth_connected : Icons.bluetooth, color: isConnected ? Colors.blueAccent : Colors.white),
           onPressed: isConnected ? disconnectDevice : showBluetoothMenu,
         ),
-        actions: [ IconButton(icon: const Icon(Icons.menu, color: Colors.white), onPressed: () {}), ],
+        actions: [ 
+          IconButton(
+            icon: const Icon(Icons.settings, color: Colors.white), 
+            onPressed: _openFirmwareUpdateMenu, // TOMBOL MENU PENGATURAN KANAN ATAS
+          ), 
+        ],
       ),
       body: Column(
         children: [
@@ -807,6 +745,144 @@ class _DashboardScreenState extends State<DashboardScreen> {
           )
         ],
       ),
+    );
+  }
+}
+
+// =========================================================================
+// WIDGET KHUSUS: DIALOG CEK & UPDATE FIRMWARE ESP32
+// =========================================================================
+class FirmwareUpdateDialog extends StatefulWidget {
+  final String currentVersion;
+  final DatabaseReference dbRef;
+  final Function(String, String, String) onUpdateTriggered;
+
+  const FirmwareUpdateDialog({
+    super.key,
+    required this.currentVersion,
+    required this.dbRef,
+    required this.onUpdateTriggered,
+  });
+
+  @override
+  State<FirmwareUpdateDialog> createState() => _FirmwareUpdateDialogState();
+}
+
+class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
+  bool isChecking = true;
+  String latestVersion = "";
+  String fwUrl = "";
+  bool hasUpdate = false;
+
+  TextEditingController ssidCtrl = TextEditingController();
+  TextEditingController passCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedCredentials();
+    _checkFirebaseForUpdate();
+  }
+
+  Future<void> _loadSavedCredentials() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() {
+      ssidCtrl.text = prefs.getString("saved_ssid") ?? "";
+      passCtrl.text = prefs.getString("saved_pass") ?? "";
+    });
+  }
+
+  Future<void> _checkFirebaseForUpdate() async {
+    try {
+      final snapshot = await widget.dbRef.child("firmware_update").get();
+      if (snapshot.exists) {
+        final data = Map<String, dynamic>.from(snapshot.value as Map);
+        latestVersion = data['version'] ?? widget.currentVersion;
+        fwUrl = data['url'] ?? "";
+      } else {
+        latestVersion = widget.currentVersion;
+      }
+    } catch (e) {
+      latestVersion = widget.currentVersion;
+    }
+
+    if (mounted) {
+      setState(() {
+        isChecking = false;
+        hasUpdate = (latestVersion != widget.currentVersion && latestVersion.isNotEmpty && fwUrl.isNotEmpty);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1E202B),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: const Text("Firmware Settings", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      content: isChecking
+          ? const SizedBox(
+              height: 100,
+              child: Center(child: CircularProgressIndicator(color: Colors.blueAccent)),
+            )
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text("Current Firmware: ${widget.currentVersion}", style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 8),
+                Text("Latest Firmware: $latestVersion", style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 20),
+                if (!hasUpdate)
+                  const Center(
+                    child: Text("System is Up to Date 🚀", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 16)),
+                  )
+                else ...[
+                  const Text("New Firmware Available!", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 15),
+                  TextField(
+                    controller: ssidCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: "WiFi SSID",
+                      labelStyle: TextStyle(color: Colors.grey),
+                      prefixIcon: Icon(Icons.wifi, color: Colors.blueAccent),
+                      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
+                    ),
+                  ),
+                  TextField(
+                    controller: passCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: "Password",
+                      labelStyle: TextStyle(color: Colors.grey),
+                      prefixIcon: Icon(Icons.lock, color: Colors.blueAccent),
+                      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text("Close", style: TextStyle(color: Colors.grey)),
+        ),
+        if (hasUpdate && !isChecking)
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+            onPressed: () async {
+              SharedPreferences prefs = await SharedPreferences.getInstance();
+              prefs.setString("saved_ssid", ssidCtrl.text);
+              prefs.setString("saved_pass", passCtrl.text);
+              
+              widget.onUpdateTriggered(ssidCtrl.text, passCtrl.text, fwUrl);
+              Navigator.pop(context);
+            },
+            child: const Text("Update Firmware", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+      ],
     );
   }
 }
