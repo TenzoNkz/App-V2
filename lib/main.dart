@@ -72,7 +72,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
   // --- MENU & SETTINGS VARIABLES ---
-  int selectedMenuIndex = 0; // 0:Voltage, 1:AI, 2:RGB, 3:Temp Settings
+  int selectedMenuIndex = 0; 
   
   double phoneBatteryTemp = 32.5; 
   Timer? _phoneTempMockTimer;
@@ -84,6 +84,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int limitBat5v = 25;
   int limitBat9v = 30;
   int limitBat12v = 35;
+
+  String _bleBuffer = "";
 
   @override
   void initState() {
@@ -165,7 +167,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text("Pilih Perangkat", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                    const Text("Select Device", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                     StreamBuilder<bool>(
                       stream: FlutterBluePlus.isScanning,
                       initialData: false,
@@ -185,7 +187,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   initialData: const [],
                   builder: (c, snapshot) {
                     final results = snapshot.data ?? [];
-                    if (results.isEmpty) return const Center(child: Text("Mencari Horizon Cooler...", style: TextStyle(color: Colors.grey)));
+                    if (results.isEmpty) return const Center(child: Text("Scanning for Horizon Cooler...", style: TextStyle(color: Colors.grey)));
                     return ListView.builder(
                       itemCount: results.length,
                       itemBuilder: (context, index) {
@@ -219,7 +221,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void connectToDevice(BluetoothDevice device) async {
-    _showSnackBar("Menyambungkan...", color: Colors.blueGrey);
+    _showSnackBar("Connecting...", color: Colors.blueGrey);
     try {
        await FlutterBluePlus.stopScan();
        if (device.isConnected) {
@@ -233,17 +235,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
        connectionSubscription = device.connectionState.listen((state) async {
          if (state == BluetoothConnectionState.connected) {
            if (mounted) setState(() => isConnected = true);
-           _showSnackBar("Terhubung! Mencocokkan Kunci...", color: Colors.green);
+           _showSnackBar("Connected! Synchronizing...", color: Colors.green);
            if (Platform.isAndroid) { try { await device.requestMtu(512); } catch(e){} }
            discoverServices(device);
          } else if (state == BluetoothConnectionState.disconnected) {
-           if (mounted) setState(() { isConnected = false; txChar = null; rxChar = null; hotsideTemp = "--"; voltage = "--"; isAiModeOn = false; });
-           _showSnackBar("Koneksi Terputus ❌", color: Colors.redAccent);
+           if (mounted) {
+             setState(() { 
+               isConnected = false; txChar = null; rxChar = null; 
+               hotsideTemp = "--"; voltage = "--"; isAiModeOn = false; 
+               _bleBuffer = ""; 
+             });
+           }
+           _showSnackBar("Connection Lost ❌", color: Colors.redAccent);
          }
        });
        await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
     } catch (e) {
-       _showSnackBar("Gagal terkoneksi!", color: Colors.redAccent);
+       _showSnackBar("Failed to connect!", color: Colors.redAccent);
        await device.disconnect();
     }
   }
@@ -277,9 +285,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (foundRxTx && rxChar != null) {
          await Future.delayed(const Duration(milliseconds: 500));
          sendCommand("SYNC"); 
-         _showSnackBar("Kunci Cocok! Sistem Siap! 🚀", color: Colors.blueAccent);
+         _showSnackBar("Synchronized! System Ready! 🚀", color: Colors.blueAccent);
       } else {
-         _showSnackBar("Gembok UUID Salah!", color: Colors.redAccent);
+         _showSnackBar("UUID Mismatch!", color: Colors.redAccent);
          await device.disconnect(); 
       }
     } catch (e) { debugPrint("Discovery Error"); }
@@ -287,55 +295,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void disconnectDevice() async => await targetDevice?.disconnect();
 
-  // ENGINE SINKRONISASI DATA ANTI-ERROR
   void parseIncomingData(String rawData) {
     if (!mounted) return;
     try {
-      // Pecah data berdasarkan garis baru (\n) karena BLE sering menumpuk pesan
-      List<String> lines = rawData.split(RegExp(r'\r?\n'));
-      
-      setState(() {
-        for (String data in lines) {
-          data = data.trim();
-          if (data.isEmpty || !data.contains(":")) continue;
-          
-          String key = data.substring(0, data.indexOf(":"));
-          String value = data.substring(data.indexOf(":") + 1).trim();
+      _bleBuffer += rawData;
+      while (_bleBuffer.contains('\n')) {
+        int index = _bleBuffer.indexOf('\n');
+        String line = _bleBuffer.substring(0, index).trim();
+        _bleBuffer = _bleBuffer.substring(index + 1);
 
-          switch (key) {
-            case "TMP":
-              hotsideTemp = value;
+        if (line.isEmpty || !line.contains(":")) continue;
+
+        List<String> parts = line.split(':');
+        if (parts.length >= 2) {
+          String key = parts[0].trim();
+          String value = parts[1].trim();
+
+          setState(() {
+            if (key == "TMP") {
+              hotsideTemp = value.replaceAll(RegExp(r'\.0*'), '');
               if (isCloudSyncing) _dbRef.child("telemetry/hotside_temp").set(hotsideTemp);
-              break;
-            case "VOL":
+            } else if (key == "VOL") {
               voltage = value;
               if (isCloudSyncing) _dbRef.child("telemetry/voltage").set(voltage);
-              break;
-            case "RGB":
+            } else if (key == "RGB") {
               isRgbOn = (value == "1");
-              break;
-            case "AI":
+            } else if (key == "AI") {
               isAiModeOn = (value == "1");
-              break;
-            case "BRV":
+            } else if (key == "BRV") {
               brightness = double.tryParse(value) ?? 255;
-              break;
-            case "VER":
+            } else if (key == "VER") {
               currentVersion = value;
-              break;
-          }
+            }
+          });
         }
-      });
-    } catch (e) {
-      debugPrint("Gagal Parse String: $e");
-    }
+      }
+    } catch (e) { debugPrint("Parsing Error"); }
   }
 
   void sendCommand(String cmd) async {
     if (rxChar != null && isConnected) {
-      try { await rxChar!.write(utf8.encode(cmd), withoutResponse: true); } catch (e) { }
+      try { 
+        await rxChar!.write(utf8.encode("$cmd\n"), withoutResponse: true); 
+      } catch (e) {}
     } else {
-      _showSnackBar("Bluetooth Belum Tersinkronisasi!", color: Colors.orangeAccent);
+      _showSnackBar("Bluetooth Not Synchronized!", color: Colors.orangeAccent);
     }
   }
 
@@ -346,7 +350,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       limitBat9v = 30;
       limitBat12v = 35;
     });
-    _showSnackBar("Pengaturan Suhu Direset ke Default", color: Colors.green);
+    _showSnackBar("Settings Reset to Default", color: Colors.green);
   }
 
   // --- UI COMPONENTS BUILDING ---
@@ -373,33 +377,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // DATA TELEMETRI
                 Expanded(
                   flex: 5,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Indikator Suhu HP (Muncul -- jika tidak terkonek)
-                      _buildTopData(isConnected ? phoneBatteryTemp.toStringAsFixed(1) : "--", "°C", "Baterai Temperature", color: Colors.orangeAccent),
+                      _buildTopData(isConnected ? phoneBatteryTemp.toStringAsFixed(1) : "--", "°C", "Battery Temperature", color: Colors.orangeAccent),
                       const SizedBox(height: 20),
-                      // Indikator Suhu ESP32
                       _buildTopData(isConnected ? hotsideTemp : "--", "°C", "Hotside Temperature", color: Colors.cyanAccent),
                       const SizedBox(height: 20),
-                      // Indikator Voltase
-                      _buildTopData(isConnected ? voltage.replaceAll('V','') : "--", "V", "Indicator Voltase", color: Colors.blueAccent),
+                      _buildTopData(isConnected ? voltage.replaceAll('V','') : "--", "V", "Voltage Indicator", color: Colors.blueAccent),
                       const SizedBox(height: 20),
-                      // Indikator AI Mode
                       _buildTopData(isConnected ? (isAiModeOn ? "ON" : "OFF") : "--", "", "AI Mode", color: isAiModeOn ? Colors.greenAccent : Colors.grey),
                     ],
                   ),
                 ),
-                // GAMBAR PRODUK (Digeser ke Kiri & Diskalakan Aman)
                 Expanded(
                   flex: 6,
                   child: Transform.translate(
-                    offset: const Offset(-20, -10), // Digeser ke Kiri agar tidak terpotong
+                    offset: const Offset(-25, -10), 
                     child: Transform.scale(
-                      scale: 1.3, // Proporsional agar gambar lebih besar tapi aman
+                      scale: 1.35, 
                       child: Image.asset(
                         'assets/cooler.png', 
                         fit: BoxFit.contain,
@@ -412,7 +410,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           
-          // --- BOTTOM SECTION (White Rounded Menu - FIXED & NOT SCROLLABLE) ---
+          // --- BOTTOM SECTION (White Rounded Menu) ---
           Expanded(
             child: Container(
               width: double.infinity,
@@ -423,24 +421,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               child: Column(
                 children: [
-                  // TAB NAVIGASI ATAS (FIXED POSITION)
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
                       Expanded(child: _buildTabMenu("Voltage", 0)),
                       Expanded(child: _buildTabMenu("AI Mode", 1)),
                       Expanded(child: _buildTabMenu("RGB Led", 2)),
-                      Expanded(child: _buildTabMenu("Temp Set", 3)),
+                      Expanded(child: _buildTabMenu("Temp Setting", 3)),
                     ],
                   ),
                   const SizedBox(height: 10),
                   const Divider(color: Colors.black12, thickness: 1.5),
                   
-                  // ISI KONTEN MENU BAWAH (FIXED HEIGHT)
                   Expanded(
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
-                      child: _buildMenuContent(), // Tanpa animasi agar terasa solid/fixed
+                      child: _buildMenuContent(), 
                     ),
                   ),
                 ],
@@ -452,8 +448,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- HELPER WIDGETS ---
-
   Widget _buildTopData(String value, String unit, String label, {Color color = Colors.white}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -463,7 +457,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(value, style: TextStyle(color: color, fontSize: 26, fontWeight: FontWeight.w900)),
-            if (unit.isNotEmpty) 
+            if (unit.isNotEmpty && value != "--") 
               Padding(
                 padding: const EdgeInsets.only(top: 4.0, left: 2),
                 child: Text(unit, style: const TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
@@ -491,11 +485,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Text(
             title, 
             textAlign: TextAlign.center,
-            style: TextStyle(
-              color: isSelected ? Colors.white : Colors.black54, 
-              fontWeight: FontWeight.bold, 
-              fontSize: 12
-            )
+            style: TextStyle(color: isSelected ? Colors.white : Colors.black54, fontWeight: FontWeight.bold, fontSize: 12)
           ),
         ),
       ),
@@ -512,7 +502,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // CONTENT 0: VOLTAGE MENU
+  // CONTENT 0: VOLTAGE
   Widget _buildVoltageMenu() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -548,7 +538,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             color: isActive ? Colors.black : Colors.white,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(color: isActive ? Colors.black : Colors.grey.shade300, width: 2),
-            boxShadow: isActive ? [BoxShadow(color: Colors.black26, blurRadius: 10, offset: const Offset(0, 5))] : [],
+            boxShadow: isActive ? [const BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))] : [],
           ),
           child: Center(
             child: Text(v, style: TextStyle(color: isActive ? Colors.white : Colors.black87, fontSize: 22, fontWeight: FontWeight.w900)),
@@ -562,7 +552,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildAiMenu() {
     return Column(
       children: [
-        // Master AI Toggle
         ListTile(
           title: const Text("Master AI Switch", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           subtitle: const Text("Turn AI control ON or OFF"),
@@ -570,20 +559,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
             value: isAiModeOn,
             activeColor: Colors.blueAccent,
             onChanged: (val) {
+              setState(() => isAiModeOn = val);
+              // LOGIKA KESELAMATAN: Memaksa 5V terlebih dahulu setiap AI dihidupkan/dimatikan
+              sendCommand("5V");
               if (val) {
-                // LOGIKA BARU: Jika diaktifkan, paksa reset ke 5V dulu sebelum Mode AI on
-                sendCommand("5V");
-                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("MODEAI"));
+                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("AION"));
               } else {
-                sendCommand("MODEAI"); // Matikan
+                Future.delayed(const Duration(milliseconds: 300), () => sendCommand("AIOFF"));
               }
             },
           ),
         ),
         const Divider(),
-        // AI Type Selector
-        _aiOptionTile(0, "Overheat Protection", "Melindungi cooler dari overheat (Hotside)."),
-        _aiOptionTile(1, "Overheat + Baterai Protection", "Menyesuaikan voltage berdasarkan suhu HP."),
+        _aiOptionTile(0, "Overheat Protection", "Protect cooler hotside from overheating."),
+        _aiOptionTile(1, "Overheat + Battery Protection", "Smart voltage scaling based on phone temp."),
       ],
     );
   }
@@ -619,12 +608,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // CONTENT 2: RGB LED MENU
+  // CONTENT 2: RGB LED
   Widget _buildRgbMenu() {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // Power Button
         InkWell(
           onTap: () => sendCommand("RGBTOGGLE"),
           child: AnimatedContainer(
@@ -640,7 +628,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
         const SizedBox(height: 25),
-        // Prev/Next Controls
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -666,28 +653,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
         const SizedBox(height: 25),
-        // Brightness
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Row(
-            children: [
-              const Icon(Icons.brightness_low, color: Colors.grey),
-              Expanded(
-                child: Slider(
-                  value: brightness, min: 1, max: 255, activeColor: Colors.black, inactiveColor: Colors.grey.shade300,
-                  onChangeEnd: (val) => sendCommand("BR:${val.toInt()}"),
-                  onChanged: (val) => setState(() => brightness = val),
-                ),
+        Row(
+          children: [
+            const Icon(Icons.brightness_low, color: Colors.grey),
+            Expanded(
+              child: Slider(
+                value: brightness, min: 1, max: 255, activeColor: Colors.black, inactiveColor: Colors.grey.shade300,
+                onChangeEnd: (val) => sendCommand("BR:${val.toInt()}"),
+                onChanged: (val) => setState(() => brightness = val),
               ),
-              Text("${(brightness / 255 * 100).toInt()}%", style: const TextStyle(fontWeight: FontWeight.bold)),
-            ],
-          ),
+            ),
+            Text("${(brightness / 255 * 100).toInt()}%", style: const TextStyle(fontWeight: FontWeight.bold)),
+          ],
         )
       ],
     );
   }
 
-  // CONTENT 3: TEMP SETTING MENU
+  // CONTENT 3: TEMP SETTING
   Widget _buildTempSettingMenu() {
     if (isAiModeOn) {
       return Column(
@@ -707,20 +690,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         const Divider(),
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 8.0),
-          child: Text("Baterai Temperature Limits", style: TextStyle(fontWeight: FontWeight.w900, color: Colors.black54)),
+          child: Text("Battery Temperature Limits", style: TextStyle(fontWeight: FontWeight.w900, color: Colors.black54)),
         ),
-        _tempAdjusterTile("5V (Drop if Temp <)", limitBat5v, (v) => setState(()=> limitBat5v = v), "°C"),
-        _tempAdjusterTile("9V (Normal Temp)", limitBat9v, (v) => setState(()=> limitBat9v = v), "°C"),
-        _tempAdjusterTile("12V (Boost if Temp >)", limitBat12v, (v) => setState(()=> limitBat12v = v), "°C"),
+        _tempAdjusterTile("5V Limit (Drop if <)", limitBat5v, (v) => setState(()=> limitBat5v = v), "°C"),
+        _tempAdjusterTile("9V Limit (Normal)", limitBat9v, (v) => setState(()=> limitBat9v = v), "°C"),
+        _tempAdjusterTile("12V Limit (Boost if >)", limitBat12v, (v) => setState(()=> limitBat12v = v), "°C"),
         
         const SizedBox(height: 20),
         ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.redAccent.withOpacity(0.1),
-            foregroundColor: Colors.red,
-            elevation: 0,
-            padding: const EdgeInsets.symmetric(vertical: 12)
-          ),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent.withOpacity(0.1), foregroundColor: Colors.red, elevation: 0, padding: const EdgeInsets.symmetric(vertical: 12)),
           onPressed: resetTempSettings, 
           icon: const Icon(Icons.restore), 
           label: const Text("Reset to Default Settings", style: TextStyle(fontWeight: FontWeight.bold)),
