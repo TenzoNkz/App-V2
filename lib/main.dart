@@ -65,7 +65,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool isAiModeOn = false;
   double brightness = 255;
   String currentVersion = "V?";
-  int rgbModeIndex = 1;
+  int rgbModeIndex = 0;
   
   bool isCloudSyncing = false;
   DatabaseReference? _dbRef;
@@ -74,7 +74,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int selectedMenuIndex = 0; 
   double phoneBatteryTemp = 0.0; 
   Timer? _batteryTempTimer;
-  Timer? _uiUpdateTimer;
   int aiModeType = 0; 
 
   int limitHot = 45;
@@ -82,7 +81,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int limitBat9v = 30;
   int limitBat12v = 35;
 
-  String _bleBuffer = "";
+  String _bleRawStream = "";
   static const platformChannel = MethodChannel('horizon_cooler/battery_temp');
 
   @override
@@ -99,7 +98,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     dataSubscription?.cancel();
     targetDevice?.disconnect();
     _batteryTempTimer?.cancel();
-    _uiUpdateTimer?.cancel();
     super.dispose();
   }
 
@@ -116,10 +114,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _startRealtimeBatteryTempReader() {
-    _batteryTempTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+    _batteryTempTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       try {
         final double nativeTemp = await platformChannel.invokeMethod('getBatteryTemperature');
-        if (mounted && nativeTemp > 0) {
+        if (mounted && nativeTemp > 0.0) {
           setState(() {
             phoneBatteryTemp = nativeTemp;
           });
@@ -218,7 +216,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   initialData: const [],
                   builder: (c, snapshot) {
                     final results = snapshot.data ?? [];
-                    // PERBAIKAN: Filter mutlak perangkat asing
                     final horizonDevices = results.where((r) {
                       String devName = r.device.platformName.isNotEmpty ? r.device.platformName : r.advertisementData.advName;
                       if (devName.trim().isEmpty) return false;
@@ -281,10 +278,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                isConnected = false; txChar = null; rxChar = null; 
                hotsideTemp = "--"; voltage = "5V"; isAiModeOn = false; 
                currentVersion = "V?";
-               _bleBuffer = ""; 
+               _bleRawStream = ""; 
              });
            }
-           _showSnackBar("Connection Lost ❌", color: Colors.redAccent);
+           _showSnackBar("Connection Lost", color: Colors.redAccent);
          }
        });
        await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
@@ -308,7 +305,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               await txChar!.setNotifyValue(true);
               dataSubscription?.cancel();
               dataSubscription = txChar!.lastValueStream.listen((val) {
-                 if (val.isNotEmpty) parseIncomingData(utf8.decode(val));
+                 if (val.isNotEmpty) parseIncomingStream(utf8.decode(val));
               });
               foundRxTx = true;
             }
@@ -323,7 +320,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (foundRxTx && rxChar != null) {
          await Future.delayed(const Duration(milliseconds: 300));
          sendCommand("SYNC"); 
-         _showSnackBar("Synchronized! System Ready! 🚀", color: Colors.blueAccent);
       } else {
          _showSnackBar("UUID Mismatch!", color: Colors.redAccent);
          await device.disconnect(); 
@@ -333,71 +329,89 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void disconnectDevice() async => await targetDevice?.disconnect();
 
-  void parseIncomingData(String rawData) {
+  void parseIncomingStream(String incoming) {
     if (!mounted) return;
     try {
-      _bleBuffer += rawData;
-      bool hasChanges = false;
+      _bleRawStream += incoming;
 
-      while (_bleBuffer.contains('\n')) {
-        int index = _bleBuffer.indexOf('\n');
-        String line = _bleBuffer.substring(0, index).trim();
-        _bleBuffer = _bleBuffer.substring(index + 1);
+      // 1. Tangani Mode Sinkronisasi Berpagar (Frame Sync)
+      while (_bleRawStream.contains("<SYNC_START>") && _bleRawStream.contains("<SYNC_END>")) {
+        int startIdx = _bleRawStream.indexOf("<SYNC_START>");
+        int endIdx = _bleRawStream.indexOf("<SYNC_END>");
 
-        if (line.isEmpty || !line.contains(":")) continue;
+        if (startIdx < endIdx) {
+          String payload = _bleRawStream.substring(startIdx + 12, endIdx);
+          _bleRawStream = _bleRawStream.substring(endIdx + 10);
 
-        List<String> parts = line.split(':');
-        if (parts.length >= 2) {
-          String key = parts[0].trim();
-          String value = parts[1].trim();
-
-          if (key == "TMP") {
-            hotsideTemp = value.replaceAll(RegExp(r'\.0+$'), '');
-            if (isCloudSyncing && _dbRef != null) _dbRef!.child("telemetry/hotside_temp").set(hotsideTemp);
-            hasChanges = true;
-          } else if (key == "VOL") {
-            voltage = value;
-            if (isCloudSyncing && _dbRef != null) _dbRef!.child("telemetry/voltage").set(voltage);
-            hasChanges = true;
-          } else if (key == "RGB") {
-            isRgbOn = (value == "1");
-            hasChanges = true;
-          } else if (key == "AI") {
-            isAiModeOn = (value == "1");
-            hasChanges = true;
-          } else if (key == "BRV") {
-            brightness = double.tryParse(value) ?? 255;
-            hasChanges = true;
-          } else if (key == "VER") {
-            currentVersion = value;
-            hasChanges = true;
-          } else if (key == "MD") {
-            rgbModeIndex = (int.tryParse(value) ?? 0);
-            hasChanges = true;
-          } else if (key == "LHT") {
-            limitHot = int.tryParse(value) ?? 45;
-            hasChanges = true;
-          } else if (key == "LB5") {
-            limitBat5v = int.tryParse(value) ?? 25;
-            hasChanges = true;
-          } else if (key == "LB9") {
-            limitBat9v = int.tryParse(value) ?? 30;
-            hasChanges = true;
-          } else if (key == "LB12") {
-            limitBat12v = int.tryParse(value) ?? 35;
-            hasChanges = true;
+          List<String> lines = payload.split('\n');
+          for (String line in lines) {
+            _applyKeyValue(line.trim());
           }
+          setState(() {}); // Render seluruh nilai serentak
+        } else {
+          _bleRawStream = _bleRawStream.substring(startIdx);
+          break;
         }
       }
 
-      if (hasChanges) {
-        _uiUpdateTimer?.cancel();
-        _uiUpdateTimer = Timer(const Duration(milliseconds: 100), () {
-          if (mounted) setState(() {});
-        });
-      }
+      // 2. Tangani Delta Updates Satuan
+      while (_bleRawStream.contains('\n')) {
+        int nlIndex = _bleRawStream.indexOf('\n');
+        String singleLine = _bleRawStream.substring(0, nlIndex).trim();
+        _bleRawStream = _bleRawStream.substring(nlIndex + 1);
 
-    } catch (e) { debugPrint("Parsing Error"); }
+        if (singleLine.contains("<SYNC_START>")) {
+          _bleRawStream = "<SYNC_START>\n" + _bleRawStream;
+          break;
+        }
+
+        if (singleLine.isNotEmpty && singleLine.contains(":")) {
+          if (_applyKeyValue(singleLine)) {
+            setState(() {});
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint("Parser Stream Error: $e");
+    }
+  }
+
+  bool _applyKeyValue(String line) {
+    if (!line.contains(":")) return false;
+    List<String> parts = line.split(':');
+    if (parts.length < 2) return false;
+
+    String key = parts[0].trim();
+    String value = parts[1].trim();
+
+    if (key == "TMP") {
+      hotsideTemp = value.replaceAll(RegExp(r'\.0+$'), '');
+      if (isCloudSyncing && _dbRef != null) _dbRef!.child("telemetry/hotside_temp").set(hotsideTemp);
+    } else if (key == "VOL") {
+      voltage = value;
+      if (isCloudSyncing && _dbRef != null) _dbRef!.child("telemetry/voltage").set(voltage);
+    } else if (key == "RGB") {
+      isRgbOn = (value == "1");
+    } else if (key == "AI") {
+      isAiModeOn = (value == "1");
+    } else if (key == "BRV") {
+      brightness = double.tryParse(value) ?? 255;
+    } else if (key == "VER") {
+      currentVersion = value;
+    } else if (key == "MD") {
+      rgbModeIndex = (int.tryParse(value) ?? 0);
+    } else if (key == "LHT") {
+      limitHot = int.tryParse(value) ?? 45;
+    } else if (key == "LB5") {
+      limitBat5v = int.tryParse(value) ?? 25;
+    } else if (key == "LB9") {
+      limitBat9v = int.tryParse(value) ?? 30;
+    } else if (key == "LB12") {
+      limitBat12v = int.tryParse(value) ?? 35;
+    } else {
+      return false;
+    }
+    return true;
   }
 
   void sendCommand(String cmd) async {
@@ -977,7 +991,7 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
                     child: Text(
                       widget.currentVersion == "V?" 
                           ? "Synchronizing Device Version..." 
-                          : "System is Up to Date 🚀", 
+                          : "System is Up to Date", 
                       style: TextStyle(
                         color: widget.currentVersion == "V?" ? Colors.orangeAccent : Colors.greenAccent, 
                         fontWeight: FontWeight.bold, 
