@@ -1,15 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     
-    <!-- Izin Bluetooth & Lokasi -->
+    <!-- Izin Bluetooth & Lokasi untuk komunikasi ESP32 C3 -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     
-    <!-- Izin Internet & Install Update APK (SANGAT WAJIB UNTUK OTA) -->
+    <!-- Izin Internet untuk sinkronisasi Telemetri & Cek Firmware Firebase -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
 
     <application
         android:label="Horizon Cooler"
@@ -37,6 +34,7 @@
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
+
     <!-- Mencegah teks terpotong di Android 11+ saat scan Bluetooth -->
     <queries>
         <intent>
