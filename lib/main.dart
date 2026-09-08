@@ -48,6 +48,9 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  // ========================================================
+  // VERSI APLIKASI SAAT INI (Ubah angka ini saat update UI!)
+  // ========================================================
   final int currentAppVersion = 1; 
 
   BluetoothDevice? targetDevice;
