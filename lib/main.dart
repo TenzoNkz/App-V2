@@ -1441,7 +1441,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildTempSettingMenu() {
     final batteryRangeText =
-        '${limitBat5v}°C to ${limitBat12v}°C';
+        '$limitBat5v°C to $limitBat12v°C';
 
     return ListView(
       physics: const BouncingScrollPhysics(),
@@ -1655,7 +1655,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _tempAdjusterTile(String label, int value, Function(int) onChanged, String unit) {
+  Widget _tempAdjusterTile(
+    String label,
+    int value,
+    Function(int) onChanged,
+    String unit,
+    {int? minValue, int? maxValue},
+  ) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
@@ -1664,9 +1670,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
           Row(
             children: [
-              IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.black54), onPressed: () => onChanged(value - 1)),
-              SizedBox(width: 45, child: Center(child: Text("$value$unit", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Colors.blueAccent)))),
-              IconButton(icon: const Icon(Icons.add_circle_outline, color: Colors.black54), onPressed: () => onChanged(value + 1)),
+              IconButton(
+                icon: const Icon(Icons.remove_circle_outline, color: Colors.black54),
+                onPressed: minValue != null && value <= minValue
+                    ? null
+                    : () => onChanged(value - 1),
+              ),
+              SizedBox(
+                width: 45,
+                child: Center(
+                  child: Text(
+                    "$value$unit",
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 15,
+                      color: Colors.blueAccent,
+                    ),
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.add_circle_outline, color: Colors.black54),
+                onPressed: maxValue != null && value >= maxValue
+                    ? null
+                    : () => onChanged(value + 1),
+              ),
             ],
           )
         ],
