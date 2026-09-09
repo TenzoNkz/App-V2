@@ -1,6 +1,5 @@
 package com.horizontalzzz.horizoncooler
 
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -39,21 +38,23 @@ class MainActivity: FlutterActivity() {
 
     private fun readBatteryTemperature(): Double {
         return try {
-            val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(ctx: Context?, intent: Intent?) {}
-            }
-            val stickyIntent = context.registerReceiver(receiver, intentFilter)
-            context.unregisterReceiver(receiver)
+            val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+            val batteryIntent = context.registerReceiver(null, filter)
+            val rawTemp = batteryIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+                ?: Int.MIN_VALUE
 
-            val rawTemp = stickyIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
-            if (rawTemp > 0) {
-                rawTemp / 10.0
+            if (rawTemp == Int.MIN_VALUE) {
+                return -1.0
+            }
+
+            val temperatureCelsius = rawTemp / 10.0
+            if (temperatureCelsius < 0.0 || temperatureCelsius > 100.0) {
+                -1.0
             } else {
-                0.0
+                temperatureCelsius
             }
         } catch (e: Exception) {
-            0.0
+            -1.0
         }
     }
 }
