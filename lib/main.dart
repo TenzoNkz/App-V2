@@ -52,6 +52,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   
   StreamSubscription<BluetoothConnectionState>? connectionSubscription;
   StreamSubscription<List<int>>? dataSubscription;
+  StreamSubscription<DatabaseEvent>? _firebaseConnectionSubscription;
+
+  bool _connectionEverEstablished = false;
+  Future<void> _commandWriteQueue = Future<void>.value();
+  double _lastSentPhoneBatteryTemp = -999.0;
   
   bool isConnected = false;
 
@@ -72,7 +77,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
   int selectedMenuIndex = 0; 
-  double phoneBatteryTemp = 0.0; 
+  double phoneBatteryTemp = -1.0;
+  bool phoneBatteryTempAvailable = false; 
   Timer? _batteryTempTimer;
   int aiModeType = 0; 
 
@@ -99,6 +105,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     dataSubscription?.cancel();
     targetDevice?.disconnect();
     _batteryTempTimer?.cancel();
+    _firebaseConnectionSubscription?.cancel();
     super.dispose();
   }
 
@@ -116,55 +123,91 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _fetchBatteryTemperature() async {
     try {
-      final double nativeTemp = await platformChannel.invokeMethod('getBatteryTemperature');
-      if (mounted && nativeTemp > 0.0) {
-        setState(() {
-          phoneBatteryTemp = nativeTemp;
-        });
+      final result = await platformChannel.invokeMethod<dynamic>('getBatteryTemperature');
+      final nativeTemp = result is num ? result.toDouble() : -1.0;
+      final valid = nativeTemp >= 0.0 && nativeTemp <= 100.0;
+
+      if (!mounted) return;
+
+      if (valid) {
+        final changed = !phoneBatteryTempAvailable || (nativeTemp - phoneBatteryTemp).abs() >= 0.1;
+        if (changed) {
+          setState(() {
+            phoneBatteryTemp = nativeTemp;
+            phoneBatteryTempAvailable = true;
+          });
+        }
+
+        if (isConnected && aiModeType == 1 &&
+            (nativeTemp - _lastSentPhoneBatteryTemp).abs() >= 0.2) {
+          _lastSentPhoneBatteryTemp = nativeTemp;
+          await sendCommand('BTP:${nativeTemp.toStringAsFixed(1)}');
+        }
+
+        if (isCloudSyncing && _dbRef != null) {
+          await _dbRef!.child('telemetry/battery_temp').set(nativeTemp.toStringAsFixed(1));
+          await _dbRef!.child('telemetry/battery_temp_available').set(true);
+        }
+      } else {
+        if (phoneBatteryTempAvailable) {
+          setState(() {
+            phoneBatteryTempAvailable = false;
+          });
+        }
+        if (isCloudSyncing && _dbRef != null) {
+          await _dbRef!.child('telemetry/battery_temp').set(null);
+          await _dbRef!.child('telemetry/battery_temp_available').set(false);
+        }
       }
     } catch (e) {
-      debugPrint("Direct battery fetch error: $e");
+      debugPrint('Direct battery fetch error: $e');
+      if (!mounted) return;
+      if (phoneBatteryTempAvailable) {
+        setState(() {
+          phoneBatteryTempAvailable = false;
+        });
+      }
     }
   }
 
   void _startRealtimeBatteryTempReader() {
-    _batteryTempTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
+    _batteryTempTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       await _fetchBatteryTemperature();
-      if (isCloudSyncing && _dbRef != null && phoneBatteryTemp > 0.0) {
-        _dbRef!.child("telemetry/battery_temp").set(phoneBatteryTemp.toStringAsFixed(1));
-      }
     });
   }
 
   Future<void> _requestPermissions() async {
-    if (Platform.isAndroid) {
-      await [Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location].request();
-      
-      try {
-        if (await FlutterBluePlus.adapterState.first == BluetoothAdapterState.off) {
-          await FlutterBluePlus.turnOn();
-        }
-      } catch (e) {}
+    if (!Platform.isAndroid) return;
 
-      ServiceStatus locationStatus = await Permission.locationWhenInUse.serviceStatus;
-      if (!locationStatus.isEnabled) {
-        try {
-          await platformChannel.invokeMethod('enableLocation');
-        } catch (e) {}
+    try {
+      final scan = await Permission.bluetoothScan.request();
+      final connect = await Permission.bluetoothConnect.request();
+
+      // Android 11 and below require location permission for BLE scans.
+      // Request it only when the newer Bluetooth permission flow is not sufficient.
+      if (!scan.isGranted || !connect.isGranted) {
+        await Permission.locationWhenInUse.request();
       }
+
+      final adapterState = await FlutterBluePlus.adapterState.first;
+      if (adapterState == BluetoothAdapterState.off) {
+        await FlutterBluePlus.turnOn();
+      }
+    } catch (e) {
+      debugPrint('Bluetooth permission/setup error: $e');
     }
   }
 
   void _initFirebaseMonitoring() {
     if (_dbRef == null) return;
-    FirebaseDatabase.instanceFor(app: Firebase.app(), databaseURL: firebaseDbUrl)
-      .ref(".info/connected").onValue.listen((event) {
-        if (mounted) {
-          setState(() {
-            isCloudSyncing = event.snapshot.value as bool? ?? false;
-          });
-        }
+    _firebaseConnectionSubscription?.cancel();
+    _firebaseConnectionSubscription = _dbRef!.child('.info/connected').onValue.listen((event) {
+      if (!mounted) return;
+      final value = event.snapshot.value;
+      setState(() {
+        isCloudSyncing = value is bool && value;
       });
+    });
   }
 
   void _showSnackBar(String message, {Color color = Colors.blueAccent}) {
@@ -259,84 +302,149 @@ class _DashboardScreenState extends State<DashboardScreen> {
     try { await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15)); } catch (e) { }
   }
 
-  void connectToDevice(BluetoothDevice device) async {
-    _showSnackBar("Connecting...", color: Colors.blueGrey);
+  Future<void> connectToDevice(BluetoothDevice device) async {
+    _showSnackBar('Connecting...', color: Colors.blueGrey);
     try {
-       await FlutterBluePlus.stopScan();
-       if (device.isConnected) {
-         await device.disconnect();
-         await Future.delayed(const Duration(milliseconds: 300));
-       }
-       
-       targetDevice = device;
-       connectionSubscription?.cancel();
-       
-       connectionSubscription = device.connectionState.listen((state) async {
-         if (state == BluetoothConnectionState.connected) {
-           if (mounted) setState(() => isConnected = true);
-           if (Platform.isAndroid) { try { await device.requestMtu(512); } catch(e){} }
-           discoverServices(device);
-         } else if (state == BluetoothConnectionState.disconnected) {
-           if (mounted) {
-             setState(() { 
-               isConnected = false; txChar = null; rxChar = null; 
-               hotsideTemp = "--"; voltage = "--"; isAiModeOn = false; 
-               currentVersion = "V?";
-               _incomingBuffer = ""; 
-             });
-           }
-           _showSnackBar("Connection Lost", color: Colors.redAccent);
-         }
-       });
-       await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
+      await FlutterBluePlus.stopScan();
+      await connectionSubscription?.cancel();
+      await dataSubscription?.cancel();
+
+      if (targetDevice != null && targetDevice != device) {
+        try {
+          await targetDevice!.disconnect();
+        } catch (_) {}
+      }
+
+      targetDevice = device;
+      txChar = null;
+      rxChar = null;
+      _connectionEverEstablished = false;
+      _incomingBuffer = '';
+
+      connectionSubscription = device.connectionState.listen((state) async {
+        if (state == BluetoothConnectionState.connected) {
+          _connectionEverEstablished = true;
+          if (mounted) {
+            setState(() => isConnected = true);
+          }
+          if (Platform.isAndroid) {
+            try {
+              await device.requestMtu(512);
+            } catch (_) {}
+          }
+          await discoverServices(device);
+        } else if (state == BluetoothConnectionState.disconnected) {
+          await dataSubscription?.cancel();
+          dataSubscription = null;
+          if (mounted) {
+            setState(() {
+              isConnected = false;
+              txChar = null;
+              rxChar = null;
+              hotsideTemp = '--';
+              voltage = '--';
+              isAiModeOn = false;
+              currentVersion = 'V?';
+              _incomingBuffer = '';
+              _lastSentPhoneBatteryTemp = -999.0;
+              phoneBatteryTempAvailable = false;
+            });
+          }
+          if (_connectionEverEstablished) {
+            _showSnackBar('Connection Lost', color: Colors.redAccent);
+          }
+        }
+      });
+
+      await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
     } catch (e) {
-       _showSnackBar("Failed to connect!", color: Colors.redAccent);
-       await device.disconnect();
+      _connectionEverEstablished = false;
+      if (mounted) {
+        setState(() {
+          isConnected = false;
+          txChar = null;
+          rxChar = null;
+        });
+      }
+      _showSnackBar('Failed to connect!', color: Colors.redAccent);
+      try {
+        await device.disconnect();
+      } catch (_) {}
     }
   }
 
-  void discoverServices(BluetoothDevice device) async {
+  Future<void> discoverServices(BluetoothDevice device) async {
     try {
-      await Future.delayed(const Duration(milliseconds: 600));
-      List<BluetoothService> services = await device.discoverServices();
-      bool foundRxTx = false;
+      final services = await device.discoverServices();
+      BluetoothCharacteristic? discoveredTx;
+      BluetoothCharacteristic? discoveredRx;
 
-      for (BluetoothService service in services) {
-        if (service.uuid.toString().toLowerCase() == serviceUUID.toLowerCase()) {
-          for (BluetoothCharacteristic char in service.characteristics) {
-            if (char.uuid.toString().toLowerCase() == charTxUUID.toLowerCase() || char.properties.notify || char.properties.indicate) {
-              txChar = char;
-              await txChar!.setNotifyValue(true);
-              dataSubscription?.cancel();
-              dataSubscription = txChar!.lastValueStream.listen((val) {
-                 if (val.isNotEmpty) parseIncomingData(utf8.decode(val));
-              });
-              foundRxTx = true;
-            }
-            if (char.uuid.toString().toLowerCase() == charRxUUID.toLowerCase() || char.properties.write || char.properties.writeWithoutResponse) {
-              rxChar = char;
-              foundRxTx = true;
-            }
+      for (final service in services) {
+        if (service.uuid.toString().toLowerCase() != serviceUUID.toLowerCase()) continue;
+        for (final characteristic in service.characteristics) {
+          final id = characteristic.uuid.toString().toLowerCase();
+          if (id == charTxUUID.toLowerCase()) {
+            discoveredTx = characteristic;
+          } else if (id == charRxUUID.toLowerCase()) {
+            discoveredRx = characteristic;
           }
         }
       }
-      
-      if (foundRxTx && rxChar != null) {
-         await Future.delayed(const Duration(milliseconds: 200));
-         sendCommand("SYNC"); 
-      } else {
-         _showSnackBar("UUID Mismatch!", color: Colors.redAccent);
-         await device.disconnect(); 
+
+      if (discoveredTx == null || discoveredRx == null) {
+        _showSnackBar('UUID Mismatch!', color: Colors.redAccent);
+        try {
+          await device.disconnect();
+        } catch (_) {}
+        return;
       }
-    } catch (e) { debugPrint("Discovery Error: $e"); }
+
+      txChar = discoveredTx;
+      rxChar = discoveredRx;
+
+      final tx = txChar!;
+      if (tx.properties.notify || tx.properties.indicate) {
+        await tx.setNotifyValue(true);
+      } else {
+        _showSnackBar('TX characteristic cannot notify!', color: Colors.redAccent);
+        await device.disconnect();
+        return;
+      }
+
+      await dataSubscription?.cancel();
+      dataSubscription = tx.lastValueStream.listen((value) {
+        if (value.isNotEmpty) {
+          parseIncomingData(utf8.decode(value, allowMalformed: true));
+        }
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await sendCommand('SYNC');
+      await sendCommand('AIM:$aiModeType');
+      if (phoneBatteryTempAvailable && aiModeType == 1) {
+        await sendCommand('BTP:${phoneBatteryTemp.toStringAsFixed(1)}');
+        _lastSentPhoneBatteryTemp = phoneBatteryTemp;
+      }
+    } catch (e) {
+      debugPrint('Discovery Error: $e');
+      _showSnackBar('Bluetooth service setup failed', color: Colors.redAccent);
+    }
   }
 
-  void disconnectDevice() async => await targetDevice?.disconnect();
+  Future<void> disconnectDevice() async {
+    try {
+      await targetDevice?.disconnect();
+    } catch (_) {}
+  }
 
   void parseIncomingData(String incoming) {
     if (!mounted) return;
     try {
       _incomingBuffer += incoming;
+      if (_incomingBuffer.length > 8192) {
+        final marker = _incomingBuffer.lastIndexOf('<SYNC_START>');
+        _incomingBuffer = marker >= 0 ? _incomingBuffer.substring(marker) : '';
+      }
 
       // 1. Tangani Frame Sync Berpagar (TAMPIL BERSAMAAN)
       if (_incomingBuffer.contains("<SYNC_START>") && _incomingBuffer.contains("<SYNC_END>")) {
@@ -375,11 +483,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool _updateField(String line) {
     if (!line.contains(":")) return false;
-    List<String> parts = line.split(':');
-    if (parts.length < 2) return false;
+    final separator = line.indexOf(':');
+    if (separator <= 0) return false;
 
-    String key = parts[0].trim();
-    String value = parts[1].trim();
+    final key = line.substring(0, separator).trim();
+    final value = line.substring(separator + 1).trim();
 
     if (key == "TMP") {
       hotsideTemp = value.replaceAll(RegExp(r'\.0+$'), '');
@@ -391,6 +499,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       isRgbOn = (value == "1");
     } else if (key == "AI") {
       isAiModeOn = (value == "1");
+    } else if (key == "AIM") {
+      final mode = int.tryParse(value);
+      if (mode != null && (mode == 0 || mode == 1)) {
+        aiModeType = mode;
+      }
     } else if (key == "BRV") {
       brightness = double.tryParse(value) ?? 255;
     } else if (key == "VER") {
@@ -411,23 +524,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return true;
   }
 
-  void sendCommand(String cmd) async {
-    if (rxChar != null && isConnected) {
-      try { 
-        await rxChar!.write(utf8.encode("$cmd\n"), withoutResponse: true); 
-      } catch (e) {}
-    } else {
-      _showSnackBar("Bluetooth Not Synchronized!", color: Colors.orangeAccent);
+  Future<bool> sendCommand(String cmd) {
+    final completer = Completer<bool>();
+    _commandWriteQueue = _commandWriteQueue.then((_) async {
+      if (rxChar == null || !isConnected) {
+        if (mounted) {
+          _showSnackBar('Bluetooth Not Synchronized!', color: Colors.orangeAccent);
+        }
+        completer.complete(false);
+        return;
+      }
+
+      try {
+        final payload = utf8.encode('$cmd\n');
+        final supportsNoResponse = rxChar!.properties.writeWithoutResponse;
+        await rxChar!.write(payload, withoutResponse: supportsNoResponse);
+        completer.complete(true);
+      } catch (e) {
+        debugPrint('BLE write failed ($cmd): $e');
+        completer.complete(false);
+      }
+    }).catchError((error) {
+      if (!completer.isCompleted) completer.complete(false);
+    });
+    return completer.future;
+  }
+
+  Future<void> _waitForVersionSync() async {
+    if (currentVersion != 'V?') return;
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (mounted && currentVersion == 'V?' && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
     }
   }
 
-  void _openFirmwareUpdateMenu() {
+  Future<void> _openFirmwareUpdateMenu() async {
     if (!isConnected) {
-      _showSnackBar("Connect to Horizon Cooler first!", color: Colors.orangeAccent);
+      _showSnackBar('Connect to Horizon Cooler first!', color: Colors.orangeAccent);
       return;
     }
-    sendCommand("SYNC"); 
-    showDialog(
+    await sendCommand('SYNC');
+    await _waitForVersionSync();
+    if (!mounted) return;
+    await showDialog(
       context: context,
       builder: (context) {
         return FirmwareUpdateDialog(
@@ -444,11 +583,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _triggerCloudOTASequence(String ssid, String pass, String fwUrl) async {
     if (!isConnected) return;
-    sendCommand("OTAENTER"); await Future.delayed(const Duration(milliseconds: 500));
-    sendCommand("SSID:$ssid"); await Future.delayed(const Duration(milliseconds: 500));
-    sendCommand("PASS:$pass"); await Future.delayed(const Duration(milliseconds: 500));
-    sendCommand("URL:$fwUrl"); await Future.delayed(const Duration(milliseconds: 500));
-    sendCommand("CLOUDOTA");
+    if (!await sendCommand('OTAENTER')) return;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!await sendCommand('SSID:$ssid')) return;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!await sendCommand('PASS:$pass')) return;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!await sendCommand('URL:$fwUrl')) return;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await sendCommand('CLOUDOTA');
   }
 
   void resetTempSettings() {
@@ -497,13 +640,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildTopData(phoneBatteryTemp > 0.0 ? phoneBatteryTemp.toStringAsFixed(1) : "--", "°C", "Battery Temperature", color: Colors.orangeAccent),
+                      _buildTopData(phoneBatteryTempAvailable ? phoneBatteryTemp.toStringAsFixed(1) : "--", "°C", "Battery Temperature", color: Colors.orangeAccent),
                       const SizedBox(height: 20),
                       _buildTopData(isConnected ? hotsideTemp : "--", "°C", "Hotside Temperature", color: Colors.cyanAccent),
                       const SizedBox(height: 20),
                       _buildTopData(isConnected ? voltage.replaceAll('V','') : "--", "V", "Voltage Indicator", color: Colors.blueAccent),
                       const SizedBox(height: 20),
-                      _buildTopData(isConnected ? (isAiModeOn ? "ON" : "OFF") : "--", "", "AI Mode", color: isAiModeOn ? Colors.greenAccent : Colors.grey),
+                      _buildTopData(isConnected ? (isAiModeOn ? "ON" : "OFF") : "--", "", "Adaptive Mode", color: isAiModeOn ? Colors.greenAccent : Colors.grey),
                     ],
                   ),
                 ),
@@ -539,7 +682,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
                       Expanded(child: _buildTabMenu("Voltage", 0)),
-                      Expanded(child: _buildTabMenu("AI Mode", 1)),
+                      Expanded(child: _buildTabMenu("Adaptive Mode", 1)),
                       Expanded(child: _buildTabMenu("RGB Led", 2)),
                       Expanded(child: _buildTabMenu("Temp Set", 3)),
                     ],
@@ -624,7 +767,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const Icon(Icons.lock_outline, color: Colors.redAccent, size: 50),
           const SizedBox(height: 10),
           const Text(
-            "Voltage Locked by AI Mode",
+            "Voltage Locked by Adaptive Mode",
             style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 20),
@@ -679,24 +822,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Column(
       children: [
         ListTile(
-          title: const Text("Master AI Switch", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          subtitle: const Text("Turn AI control ON or OFF"),
+          title: const Text("Master Adaptive Switch", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          subtitle: const Text("Turn adaptive control ON or OFF"),
           trailing: Switch(
             value: isAiModeOn,
             activeColor: Colors.blueAccent,
-            onChanged: (val) {
+            onChanged: (val) async {
               setState(() => isAiModeOn = val);
-              if (val) {
-                sendCommand("AION");
-              } else {
-                sendCommand("AIOFF");
+              await sendCommand(val ? 'AION' : 'AIOFF');
+              await sendCommand('AIM:$aiModeType');
+              if (val && aiModeType == 1 && phoneBatteryTempAvailable) {
+                await sendCommand('BTP:${phoneBatteryTemp.toStringAsFixed(1)}');
+                _lastSentPhoneBatteryTemp = phoneBatteryTemp;
               }
             },
           ),
         ),
         const Divider(),
-        _aiOptionTile(0, "Overheat Protection", "Protect cooler hotside from overheating."),
-        _aiOptionTile(1, "Overheat + Battery Protection", "Smart voltage scaling based on phone temp."),
+        _aiOptionTile(0, "Temperature Protection", "Protect the cooler from overheating."),
+        _aiOptionTile(1, "Temperature + Battery Protection", "Adjust voltage automatically from phone battery temperature."),
       ],
     );
   }
@@ -704,7 +848,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _aiOptionTile(int index, String title, String sub) {
     bool isSelected = aiModeType == index;
     return InkWell(
-      onTap: () => setState(() => aiModeType = index),
+      onTap: () async {
+        setState(() => aiModeType = index);
+        await sendCommand('AIM:$index');
+        if (index == 1 && phoneBatteryTempAvailable) {
+          await sendCommand('BTP:${phoneBatteryTemp.toStringAsFixed(1)}');
+          _lastSentPhoneBatteryTemp = phoneBatteryTemp;
+        }
+      },
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 8),
         padding: const EdgeInsets.all(15),
@@ -805,7 +956,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: const [
           Icon(Icons.lock_outline, color: Colors.redAccent, size: 50),
           SizedBox(height: 10),
-          Text("Settings Locked by AI Mode", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+          Text("Settings Locked by Adaptive Mode", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
         ],
       );
     }
@@ -928,6 +1079,14 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
     }
   }
 
+  int _versionValue(String version) {
+    final match = RegExp(r'^V(\d+)(?:\.(\d+))?$').firstMatch(version.trim().toUpperCase());
+    if (match == null) return -1;
+    final major = int.tryParse(match.group(1)!) ?? 0;
+    final minor = int.tryParse(match.group(2) ?? '0') ?? 0;
+    return major * 100 + minor;
+  }
+
   Future<void> _checkFirebaseForUpdate() async {
     if (widget.dbRef == null) {
       if (mounted) {
@@ -943,9 +1102,14 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
     try {
       final snapshot = await widget.dbRef!.child("firmware_update").get();
       if (snapshot.exists && snapshot.value != null) {
-        final data = Map<String, dynamic>.from(snapshot.value as Map);
-        latestVersion = data['version'] ?? widget.currentVersion;
-        fwUrl = data['url'] ?? "";
+        final raw = snapshot.value;
+        if (raw is Map) {
+          final data = Map<String, dynamic>.from(raw);
+          latestVersion = data['version']?.toString() ?? widget.currentVersion;
+          fwUrl = data['url']?.toString() ?? '';
+        } else {
+          latestVersion = widget.currentVersion;
+        }
       } else {
         latestVersion = widget.currentVersion;
       }
@@ -956,8 +1120,8 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
     if (mounted) {
       setState(() {
         isChecking = false;
-        hasUpdate = (widget.currentVersion != "V?" &&
-            latestVersion != widget.currentVersion &&
+        hasUpdate = (widget.currentVersion != 'V?' &&
+            _versionValue(latestVersion) > _versionValue(widget.currentVersion) &&
             latestVersion.isNotEmpty &&
             fwUrl.isNotEmpty);
       });
@@ -1033,8 +1197,8 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
             onPressed: () async {
               SharedPreferences prefs = await SharedPreferences.getInstance();
-              prefs.setString("saved_ssid", ssidCtrl.text);
-              prefs.setString("saved_pass", passCtrl.text);
+              await prefs.setString('saved_ssid', ssidCtrl.text.trim());
+              await prefs.setString('saved_pass', passCtrl.text);
               
               widget.onUpdateTriggered(ssidCtrl.text, passCtrl.text, fwUrl);
               Navigator.pop(context);
