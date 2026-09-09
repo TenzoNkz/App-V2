@@ -641,6 +641,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               _lastBatteryProtectionLevel = -1;
             });
           }
+          // Give the Android BLE stack and ESP32 a brief settle time after
+          // the connection callback before service discovery/MTU negotiation.
+          await Future<void>.delayed(const Duration(milliseconds: 600));
           if (Platform.isAndroid) {
             try {
               await device.requestMtu(512);
@@ -739,29 +742,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
       });
 
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      // Register the notification listener first, then request the initial
+      // state. The firmware can answer SYNC very quickly after the write.
+      await Future<void>.delayed(const Duration(milliseconds: 200));
       _syncFrameReceived = false;
       _isInitialSync = true;
-      await sendCommand('SYNC', showError: false);
 
-      final syncDeadline = DateTime.now().add(
-        const Duration(seconds: 3),
-      );
+      for (int attempt = 0; attempt < 3 && mounted && !_syncFrameReceived; attempt++) {
+        await sendCommand('SYNC', showError: false);
 
-      while (mounted &&
-          !_syncFrameReceived &&
-          DateTime.now().isBefore(syncDeadline)) {
-        await Future<void>.delayed(
-          const Duration(milliseconds: 50),
+        final syncDeadline = DateTime.now().add(
+          const Duration(seconds: 1),
         );
+
+        while (mounted &&
+            !_syncFrameReceived &&
+            DateTime.now().isBefore(syncDeadline)) {
+          await Future<void>.delayed(
+            const Duration(milliseconds: 50),
+          );
+        }
+
+        if (!_syncFrameReceived && attempt < 2) {
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+        }
       }
 
       if (!_syncFrameReceived) {
-        await device.disconnect();
         _showSnackBar(
-          'Device Sync Timeout!',
+          'Device Sync Failed — keeping connection for retry',
           color: Colors.redAccent,
         );
+        _isInitialSync = false;
         return;
       }
 
