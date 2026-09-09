@@ -1684,7 +1684,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     int value,
     void Function(int) onChanged,
     String unit,
-    [int? minValue, int? maxValue],
+    [int? minValue, int? maxValue]
   ) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
