@@ -3,8 +3,10 @@ name: Horizon Cooler Build
 on:
   push:
     branches: ["main"]
+
   pull_request:
     branches: ["main"]
+
   workflow_dispatch:
 
 jobs:
@@ -12,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -35,7 +38,11 @@ jobs:
         shell: bash
         run: |
           if [ ! -f android/gradlew ] || [ ! -f android/gradle/wrapper/gradle-wrapper.jar ]; then
-            flutter create --platforms=android --project-name=horizoncooler --org=com.horizontalzzz --no-pub .
+            flutter create \
+              --platforms=android \
+              --project-name=horizoncooler \
+              --org=com.horizontalzzz \
+              --no-pub .
           fi
 
       - name: Install dependencies
