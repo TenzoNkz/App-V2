@@ -7,7 +7,7 @@
 - Firebase `.info/connected` is stored as a cancelable subscription and cleaned up with the screen lifecycle.
 - Battery telemetry no longer creates overlapping timer writes and can be sent to the ESP32 for battery-aware AI protection.
 - AI profile selection (`AIM:0/1`) and phone battery temperature (`BTP:x.x`) are now part of the App↔ESP32 protocol.
-- Firmware AI mode now uses the phone battery thresholds for the second profile and stays conservative when battery temperature is unavailable.
+- Firmware Adaptive Mode now uses the phone battery thresholds for the second profile and stays conservative when battery temperature is unavailable.
 - Firmware temperature limits are validated/sanitized before use.
 - Firmware update comparison now treats `Vmajor.minor` numerically, so an older firmware cannot be offered as an update just because its string differs.
 - Firmware update dialog waits for BLE version synchronization before checking Firebase for a new firmware.
