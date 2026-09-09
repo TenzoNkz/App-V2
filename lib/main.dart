@@ -59,10 +59,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool _connectionEverEstablished = false;
   Future<void> _commandWriteQueue = Future<void>.value();
-  double _lastSentPhoneBatteryTemp = -999.0;
   int _lastBatteryProtectionLevel = -1;
   bool _syncFrameReceived = false;
-  bool _syncInProgress = false;
   bool _isInitialSync = false;
   bool _isBatteryReadBusy = false;
   
@@ -166,7 +164,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
           if (protectionLevel != _lastBatteryProtectionLevel) {
             _lastBatteryProtectionLevel = protectionLevel;
-            _lastSentPhoneBatteryTemp = nativeTemp;
             await sendCommand(
               'BTP:${nativeTemp.toStringAsFixed(1)}',
               showError: false,
@@ -640,7 +637,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             setState(() {
               isConnected = false;
               _syncFrameReceived = false;
-              _syncInProgress = true;
               _isInitialSync = true;
               _lastBatteryProtectionLevel = -1;
             });
@@ -666,10 +662,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               isAiModeOn = false;
               currentVersion = 'V?';
               _incomingBuffer = '';
-              _lastSentPhoneBatteryTemp = -999.0;
               _lastBatteryProtectionLevel = -1;
               _syncFrameReceived = false;
-              _syncInProgress = false;
               _isInitialSync = false;
             });
           }
@@ -747,7 +741,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       await Future<void>.delayed(const Duration(milliseconds: 100));
       _syncFrameReceived = false;
-      _syncInProgress = true;
       _isInitialSync = true;
       await sendCommand('SYNC', showError: false);
 
@@ -764,7 +757,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
 
       if (!_syncFrameReceived) {
-        _syncInProgress = false;
         await device.disconnect();
         _showSnackBar(
           'Device Sync Timeout!',
@@ -782,13 +774,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
           showError: false,
         );
-        _lastSentPhoneBatteryTemp = phoneBatteryTemp;
       }
 
       if (mounted) {
         setState(() {
           isConnected = true;
-          _syncInProgress = false;
           _isInitialSync = false;
         });
       }
@@ -837,7 +827,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           }
 
           _syncFrameReceived = true;
-          _syncInProgress = false;
 
           if (mounted && !_isInitialSync && isConnected) {
             setState(() {});
@@ -973,8 +962,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         showError: false,
       );
 
-      _lastSentPhoneBatteryTemp =
-          phoneBatteryTemp;
     }
 
     if (isCloudSyncing && _dbRef != null) {
@@ -1333,7 +1320,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
                   showError: false,
                 );
-                _lastSentPhoneBatteryTemp = phoneBatteryTemp;
               }
             } : null,
           ),
@@ -1358,7 +1344,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
             showError: false,
           );
-          _lastSentPhoneBatteryTemp = phoneBatteryTemp;
         }
       } : null,
       child: Container(
