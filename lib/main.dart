@@ -88,6 +88,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double phoneBatteryTemp = -1.0;
   bool phoneBatteryTempAvailable = false; 
   Timer? _batteryTempTimer;
+  Timer? _limitSendDebounce;
   int aiModeType = 0;
 
   int limitHot = 45;
@@ -309,6 +310,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     } catch (e) {
       debugPrint('Location settings error: $e');
+    }
+  }
+
+  Future<bool> _isBluetoothReady() async {
+    try {
+      final adapterState =
+          await FlutterBluePlus.adapterState.first;
+
+      if (adapterState != BluetoothAdapterState.on) {
+        return false;
+      }
+
+      if (!Platform.isAndroid) {
+        return true;
+      }
+
+      final scanStatus = await Permission.bluetoothScan.status;
+      final connectStatus = await Permission.bluetoothConnect.status;
+
+      return scanStatus.isGranted && connectStatus.isGranted;
+    } catch (e) {
+      debugPrint('Bluetooth status check error: $e');
+      return false;
     }
   }
 
@@ -1477,8 +1501,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             );
           },
           '°C',
-          minValue: 35,
-          maxValue: 80,
+          35,
+          80,
         ),
         const SizedBox(height: 10),
         const Divider(),
@@ -1658,9 +1682,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _tempAdjusterTile(
     String label,
     int value,
-    Function(int) onChanged,
+    void Function(int) onChanged,
     String unit,
-    {int? minValue, int? maxValue},
+    [int? minValue, int? maxValue],
   ) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
