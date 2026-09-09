@@ -65,7 +65,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _syncFrameReceived = false;
   bool _isInitialSync = false;
   bool _isBatteryReadBusy = false;
-  int _lastSentBatteryProtectionLevel = -1;
   
   bool isConnected = false;
 
@@ -77,7 +76,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String voltage = "5V";
   bool isRgbOn = true;
   bool isAiModeOn = false;
-  double brightness = 255;
+  double brightness = 100;
   String currentVersion = "V?";
   int rgbModeIndex = 0;
   
@@ -163,17 +162,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           });
         }
 
-        if (isConnected && isAiModeOn && aiModeType == 1) {
-          final level = _batteryProtectionLevel(nativeTemp);
-          if (level != _lastSentBatteryProtectionLevel) {
-            final sent = await sendCommand(
-              'PHONE:BT=${nativeTemp.toStringAsFixed(1)}',
-              showError: false,
-            );
-            if (sent) {
-              _lastSentBatteryProtectionLevel = level;
-            }
-          }
+        if (batteryTempChanged && isConnected && isAiModeOn && aiModeType == 1) {
+          // Phone battery temperature is a live Adaptive input. Send only when the
+          // reported value actually changes, and send it immediately.
+          await sendCommand(
+            'PHONE:BT=${nativeTemp.toStringAsFixed(1)}',
+            showError: false,
+          );
         }
 
         if (isCloudSyncing && _dbRef != null) {
@@ -189,17 +184,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           });
         }
 
-        if (isConnected &&
-            isAiModeOn &&
-            aiModeType == 1 &&
-            _lastSentBatteryProtectionLevel != 0) {
-          final sent = await sendCommand(
-            'PHONE:BT=-10.0',
-            showError: false,
-          );
-          if (sent) {
-            _lastSentBatteryProtectionLevel = 0;
-          }
+        if (isConnected && isAiModeOn && aiModeType == 1) {
+          // Mark the live phone temperature as unavailable on the ESP32 too.
+          await sendCommand('PHONE:BT=-10.0', showError: false);
         }
 
         if (isCloudSyncing && _dbRef != null) {
@@ -218,18 +205,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } finally {
       _isBatteryReadBusy = false;
     }
-  }
-
-  int _batteryProtectionLevel(double temperature) {
-    if (temperature < limitBat5v) {
-      return 0;
-    }
-
-    if (temperature >= limitBat12v) {
-      return 2;
-    }
-
-    return 1;
   }
 
   void _startRealtimeBatteryTempReader() {
@@ -636,7 +611,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       rxChar = null;
       _connectionEverEstablished = false;
       _incomingBuffer = '';
-      _lastSentBatteryProtectionLevel = -1;
 
       connectionSubscription = device.connectionState.listen((state) async {
         if (state == BluetoothConnectionState.connected) {
@@ -674,8 +648,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               _incomingBuffer = '';
               _syncFrameReceived = false;
               _isInitialSync = false;
-              _lastSentBatteryProtectionLevel = -1;
-            });
+                    });
           }
           if (_connectionEverEstablished) {
             _showSnackBar('Connection Lost', color: Colors.redAccent);
@@ -784,12 +757,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return;
       }
 
+      final brightnessRaw = (brightness / 100.0 * 255.0).round().clamp(1, 255);
       final configParts = <String>[
         'AI=${isAiModeOn ? 1 : 0}',
         'AIM=$aiModeType',
         'LHT=$limitHot',
         'LB5=$limitBat5v',
         'LB12=$limitBat12v',
+        'VOL=$voltage',
+        'RGB=${isRgbOn ? 1 : 0}',
+        'MD=$rgbModeIndex',
+        'BR=$brightnessRaw',
       ];
       if (phoneBatteryTempAvailable && aiModeType == 1) {
         configParts.add(
@@ -800,11 +778,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         'CFG:${configParts.join(';')}',
         showError: false,
       );
-      _lastSentBatteryProtectionLevel =
-          phoneBatteryTempAvailable
-              ? _batteryProtectionLevel(phoneBatteryTemp)
-              : 0;
-
       if (mounted) {
         setState(() {
           isConnected = true;
@@ -917,7 +890,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final parsedTemp = double.tryParse(value);
       hotsideTemp = parsedTemp != null && parsedTemp >= 998.0
           ? "--"
-          : value.replaceAll(RegExp(r'\.0+$'), '');
+          : parsedTemp.toStringAsFixed(1);
       if (isCloudSyncing && _dbRef != null) {
         _dbRef!.child("telemetry/hotside_temp").set(hotsideTemp);
       }
@@ -934,7 +907,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         aiModeType = mode;
       }
     } else if (key == "BRV") {
-      brightness = double.tryParse(value) ?? 255;
+      final raw = double.tryParse(value) ?? 255;
+      brightness = (raw / 255.0 * 100.0).clamp(1.0, 100.0).toDouble();
     } else if (key == "VER") {
       currentVersion = value;
     } else if (key == "MD") {
@@ -970,15 +944,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _normalizeBatteryLimits({int? changed}) {
-    limitBat5v = limitBat5v.clamp(10, 59).toInt();
-    limitBat12v = limitBat12v.clamp(11, 60).toInt();
+    limitBat5v = limitBat5v.clamp(20, 48).toInt();
+    limitBat12v = limitBat12v.clamp(22, 50).toInt();
 
-    // Keep at least one integer temperature inside the locked 9V band.
     if (limitBat12v < limitBat5v + 2) {
       if (changed == 5) {
-        limitBat12v = (limitBat5v + 2).clamp(12, 60).toInt();
+        limitBat12v = (limitBat5v + 2).clamp(22, 50).toInt();
       } else {
-        limitBat5v = (limitBat12v - 2).clamp(10, 58).toInt();
+        limitBat5v = (limitBat12v - 2).clamp(20, 48).toInt();
       }
     }
   }
@@ -1109,7 +1082,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF111113),
       appBar: AppBar(
-        title: const Text("Horizon Cooler", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white)),
+        title: const Text('Horizon Cooler', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 19, color: Colors.white)),
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -1117,17 +1090,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           icon: Icon(isConnected ? Icons.bluetooth_connected : Icons.bluetooth, color: isConnected ? Colors.blueAccent : Colors.white),
           onPressed: isConnected ? disconnectDevice : showBluetoothMenu,
         ),
-        actions: [ 
-          IconButton(
-            icon: const Icon(Icons.settings, color: Colors.white), 
-            onPressed: _openFirmwareUpdateMenu, 
-          ), 
-        ],
+        actions: [IconButton(icon: const Icon(Icons.settings, color: Colors.white), onPressed: _openFirmwareUpdateMenu)],
       ),
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.only(left: 20, right: 10, top: 10, bottom: 20),
+            padding: const EdgeInsets.fromLTRB(20, 8, 12, 20),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1136,86 +1104,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildTopData(
-                        isConnected && phoneBatteryTempAvailable
-                            ? phoneBatteryTemp.toStringAsFixed(1)
-                            : "--",
-                        "°C",
-                        "Battery Temperature",
-                        color: Colors.orangeAccent,
-                      ),
-                      const SizedBox(height: 20),
-                      _buildTopData(
-                        isConnected ? hotsideTemp : "--",
-                        "°C",
-                        "Hotside Temperature",
-                        color: Colors.cyanAccent,
-                      ),
-                      const SizedBox(height: 20),
-                      _buildTopData(
-                        isConnected ? voltage.replaceAll('V', '') : "--",
-                        "V",
-                        "Voltage Indicator",
-                        color: Colors.blueAccent,
-                      ),
-                      const SizedBox(height: 20),
-                      _buildTopData(
-                        isConnected ? (isAiModeOn ? "ON" : "OFF") : "--",
-                        "",
-                        "Adaptive Mode",
-                        color: isAiModeOn
-                            ? Colors.greenAccent
-                            : Colors.grey,
-                      ),
+                      _buildTopData(isConnected && phoneBatteryTempAvailable ? phoneBatteryTemp.toStringAsFixed(1) : '--', '°C', 'Battery Temperature', color: Colors.orangeAccent),
+                      const SizedBox(height: 19),
+                      _buildTopData(isConnected ? hotsideTemp : '--', '°C', 'Hotside Temperature', color: Colors.cyanAccent),
+                      const SizedBox(height: 19),
+                      _buildTopData(isConnected ? voltage.replaceAll('V', '') : '--', 'V', 'Voltage Indicator', color: Colors.blueAccent),
+                      const SizedBox(height: 19),
+                      _buildTopData(isConnected ? (isAiModeOn ? 'ON' : 'OFF') : '--', '', 'Adaptive Mode', color: isAiModeOn ? Colors.greenAccent : Colors.grey),
                     ],
                   ),
                 ),
                 Expanded(
                   flex: 6,
                   child: Transform.translate(
-                    offset: const Offset(-25, -10), 
-                    child: Transform.scale(
-                      scale: 1.35, 
-                      child: Image.asset(
-                        'assets/cooler.png', 
-                        fit: BoxFit.contain,
-                        height: 250,
-                      ),
-                    ),
+                    offset: const Offset(-25, -8),
+                    child: Transform.scale(scale: 1.35, child: Image.asset('assets/cooler.png', fit: BoxFit.contain, height: 250)),
                   ),
                 ),
               ],
             ),
           ),
-          
           Expanded(
             child: Container(
               width: double.infinity,
-              padding: const EdgeInsets.only(top: 20, left: 10, right: 10),
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(35)),
-              ),
+              padding: const EdgeInsets.fromLTRB(10, 17, 10, 0),
+              decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(35))),
               child: Column(
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      Expanded(child: _buildTabMenu("Voltage", 0)),
-                      Expanded(child: _buildTabMenu("Adaptive Mode", 1)),
-                      Expanded(child: _buildTabMenu("RGB Led", 2)),
-                      Expanded(child: _buildTabMenu("Temp Set", 3)),
+                      Expanded(child: _buildTabMenu('VOLTAGE', 0)),
+                      Expanded(child: _buildTabMenu('ADAPTIVE', 1)),
+                      Expanded(child: _buildTabMenu('LED', 2)),
+                      Expanded(child: _buildTabMenu('TEMPERATURE', 3)),
                     ],
                   ),
                   const SizedBox(height: 10),
-                  const Divider(color: Colors.black12, thickness: 1.5),
-                  
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      child: _buildMenuContent(), 
-                    ),
-                  ),
+                  const Divider(color: Colors.black12, thickness: 1.2),
+                  Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: _buildMenuContent())),
                 ],
               ),
             ),
@@ -1233,37 +1159,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(value, style: TextStyle(color: color, fontSize: 26, fontWeight: FontWeight.w900)),
-            if (unit.isNotEmpty && value != "--") 
+            Text(value, style: TextStyle(color: color, fontSize: 26, fontWeight: FontWeight.w900, height: 1.0)),
+            if (unit.isNotEmpty && value != '--')
               Padding(
-                padding: const EdgeInsets.only(top: 4.0, left: 2),
-                child: Text(unit, style: const TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
+                padding: const EdgeInsets.only(top: 3, left: 2),
+                child: Text(unit, style: const TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.w800)),
               ),
           ],
         ),
-        const SizedBox(height: 2),
-        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 3),
+        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.w700)),
       ],
     );
   }
 
   Widget _buildTabMenu(String title, int index) {
-    bool isSelected = selectedMenuIndex == index;
+    final isSelected = selectedMenuIndex == index;
     return GestureDetector(
       onTap: () => setState(() => selectedMenuIndex = index),
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
         margin: const EdgeInsets.symmetric(horizontal: 2),
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.black : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
-        ),
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        decoration: BoxDecoration(color: isSelected ? Colors.black : Colors.transparent, borderRadius: BorderRadius.circular(18)),
         child: Center(
-          child: Text(
-            title, 
-            textAlign: TextAlign.center,
-            style: TextStyle(color: isSelected ? Colors.white : Colors.black54, fontWeight: FontWeight.bold, fontSize: 12),
-          ),
+          child: Text(title, textAlign: TextAlign.center, style: TextStyle(color: isSelected ? Colors.white : Colors.black54, fontWeight: FontWeight.w800, fontSize: 11)),
         ),
       ),
     );
@@ -1275,536 +1195,232 @@ class _DashboardScreenState extends State<DashboardScreen> {
       case 1: return _buildAiMenu();
       case 2: return _buildRgbMenu();
       case 3: return _buildTempSettingMenu();
-      default: return Container();
+      default: return const SizedBox.shrink();
     }
   }
 
-  Widget _buildVoltageMenu() {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        if (isAiModeOn) ...[
-          const Icon(Icons.lock_outline, color: Colors.redAccent, size: 50),
-          const SizedBox(height: 10),
-          const Text(
-            "Voltage Locked by Adaptive Mode",
-            style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 20),
-        ],
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            _voltButton("5V"),
-            _voltButton("9V"),
-            _voltButton("12V"),
-          ],
-        ),
-      ],
+  Widget _premiumCard({required Widget child, EdgeInsetsGeometry? padding}) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 7),
+      padding: padding ?? const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7F7F8),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFE7E7E9)),
+        boxShadow: const [BoxShadow(color: Color(0x12000000), blurRadius: 12, offset: Offset(0, 5))],
+      ),
+      child: child,
     );
   }
 
-  Widget _voltButton(String v) {
-    bool isActive = voltage == v;
-    return Opacity(
-      opacity: !isConnected || isAiModeOn ? 0.4 : 1.0,
-      child: InkWell(
-        onTap: !isConnected || isAiModeOn ? null : () {
-          setState(() => voltage = v);
-          sendCommand(v);
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          width: 80,
-          height: 80,
-          decoration: BoxDecoration(
-            color: isActive ? Colors.black : Colors.white,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: isActive ? Colors.black : Colors.grey.shade300, width: 2),
-            boxShadow: isActive ? [const BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))] : [],
-          ),
-          child: Center(
-            child: Text(
-              v,
-              style: TextStyle(
-                color: isActive ? Colors.white : Colors.black87,
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
-        ),
+  Widget _sectionTitle(String title, {String? subtitle}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: -0.2)),
+          if (subtitle != null) ...[
+            const SizedBox(height: 3),
+            Text(subtitle, style: const TextStyle(color: Colors.black45, fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
+        ],
       ),
     );
   }
 
-  Widget _buildAiMenu() {
-    return Column(
+  Widget _buildVoltageMenu() {
+    final locked = isAiModeOn;
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 24),
       children: [
-        ListTile(
-          title: const Text("Master Adaptive Switch", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          subtitle: const Text("Turn adaptive control ON or OFF"),
-          trailing: Switch(
-            value: isConnected && isAiModeOn,
-            activeColor: Colors.blueAccent,
-            onChanged: isConnected ? (val) async {
-              setState(() => isAiModeOn = val);
-              if (!val) {
-                }
-              final adaptParts = <String>[
-                'ON=${val ? 1 : 0}',
-                'MODE=$aiModeType',
-              ];
-              if (val && aiModeType == 1 && phoneBatteryTempAvailable) {
-                adaptParts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
-              }
-              final sent = await sendCommand(
-                'ADAPT:${adaptParts.join(';')}',
-                showError: false,
-              );
-              if (sent && val && aiModeType == 1 && phoneBatteryTempAvailable) {
-                _lastSentBatteryProtectionLevel =
-                    _batteryProtectionLevel(phoneBatteryTemp);
-              }
-            } : null,
-          ),
+        _sectionTitle('Voltage Control', subtitle: locked ? 'Adaptive is controlling the output voltage.' : 'Choose the output voltage manually.'),
+        _premiumCard(
+          padding: const EdgeInsets.fromLTRB(14, 6, 14, 14),
+          child: Column(children: [
+            _voltageRow('5V', 'Low Mode', locked),
+            _voltageRow('9V', 'Mid Mode', locked),
+            _voltageRow('12V', 'High Mode', locked, isLast: true),
+          ]),
         ),
-        const Divider(),
-        _aiOptionTile(0, "Temperature Protection", "Protect the cooler from overheating."),
-        _aiOptionTile(1, "Temperature + Battery Protection", "Adjust voltage automatically from phone battery temperature."),
       ],
     );
   }
 
-  Widget _aiOptionTile(int index, String title, String sub) {
-    bool isSelected = aiModeType == index;
-    return InkWell(
-      onTap: isConnected ? () async {
-        setState(() => aiModeType = index);
-        final adaptParts = <String>[
-          'ON=${isAiModeOn ? 1 : 0}',
-          'MODE=$index',
-        ];
-        if (isAiModeOn && index == 1 && phoneBatteryTempAvailable) {
-          adaptParts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
-        }
-        final sent = await sendCommand(
-          'ADAPT:${adaptParts.join(';')}',
-          showError: false,
-        );
-        if (sent && isAiModeOn && index == 1 && phoneBatteryTempAvailable) {
-          _lastSentBatteryProtectionLevel =
-              _batteryProtectionLevel(phoneBatteryTemp);
-        }
-      } : null,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 8),
-        padding: const EdgeInsets.all(15),
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.blue.withOpacity(0.1) : Colors.white,
-          border: Border.all(color: isSelected ? Colors.blueAccent : Colors.grey.shade300, width: 2),
-          borderRadius: BorderRadius.circular(15),
+  Widget _voltageRow(String value, String mode, bool locked, {bool isLast = false}) {
+    final isActive = voltage == value;
+    return Column(
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(17),
+          onTap: !isConnected || locked ? null : () => sendCommand(value, showError: false),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+            decoration: BoxDecoration(color: isActive ? Colors.black : Colors.white, borderRadius: BorderRadius.circular(17), border: Border.all(color: isActive ? Colors.black : const Color(0xFFE3E3E5))),
+            child: Row(children: [
+              Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: isActive ? Colors.blueAccent : Colors.black26)),
+              const SizedBox(width: 12),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(value, style: TextStyle(color: isActive ? Colors.white : Colors.black, fontWeight: FontWeight.w900, fontSize: 19)),
+                Text(mode, style: TextStyle(color: isActive ? Colors.white70 : Colors.black45, fontSize: 11, fontWeight: FontWeight.w700)),
+              ])),
+              if (locked) const Icon(Icons.lock_outline, size: 18, color: Colors.black38),
+              if (isActive && !locked) const Icon(Icons.check_circle, size: 20, color: Colors.blueAccent),
+            ]),
+          ),
         ),
-        child: Row(
-          children: [
-            Icon(isSelected ? Icons.check_circle : Icons.circle_outlined, color: isSelected ? Colors.blueAccent : Colors.grey),
-            const SizedBox(width: 15),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                  Text(sub, style: TextStyle(color: Colors.grey.shade600, fontSize: 11)),
-                ],
-              ),
+        if (!isLast) const SizedBox(height: 8),
+      ],
+    );
+  }
+
+  Widget _buildAiMenu() {
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 24),
+      children: [
+        _sectionTitle('Adaptive Switch', subtitle: 'Automatic voltage control prioritizes overheat protection.'),
+        _premiumCard(
+          child: Row(children: [
+            Container(width: 46, height: 46, decoration: BoxDecoration(shape: BoxShape.circle, color: isAiModeOn ? Colors.green.withOpacity(0.13) : Colors.black.withOpacity(0.06)), child: Icon(isAiModeOn ? Icons.shield_rounded : Icons.shield_outlined, color: isAiModeOn ? Colors.green.shade700 : Colors.black45)),
+            const SizedBox(width: 13),
+            const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Adaptive Switch', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900)), SizedBox(height: 3), Text('Master control', style: TextStyle(fontSize: 11, color: Colors.black45, fontWeight: FontWeight.w600))])),
+            Switch(
+              value: isConnected && isAiModeOn,
+              activeColor: Colors.green,
+              onChanged: isConnected ? (val) async {
+                setState(() => isAiModeOn = val);
+                final parts = <String>['ON=${val ? 1 : 0}', 'MODE=$aiModeType'];
+                if (val && aiModeType == 1 && phoneBatteryTempAvailable) parts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
+                await sendCommand('ADAPT:${parts.join(';')}', showError: false);
+              } : null,
             ),
-          ],
+          ]),
         ),
+        _sectionTitle('Overheat Protection', subtitle: 'Mode selection is locked while Adaptive is ON.'),
+        _adaptiveModeCard(0, 'Overheat Protection', 'Automatic voltage reduction from hotside temperature.'),
+        _adaptiveModeCard(1, 'Overheat + Battery Protection', 'Adds the phone battery temperature safety ceiling.'),
+      ],
+    );
+  }
+
+  Widget _adaptiveModeCard(int index, String title, String subtitle) {
+    final selected = aiModeType == index;
+    final locked = isAiModeOn;
+    return Opacity(
+      opacity: locked ? 0.55 : 1.0,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: !isConnected || locked ? null : () async {
+          setState(() => aiModeType = index);
+          final parts = <String>['ON=${isAiModeOn ? 1 : 0}', 'MODE=$index'];
+          if (isAiModeOn && index == 1 && phoneBatteryTempAvailable) parts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
+          await sendCommand('ADAPT:${parts.join(';')}', showError: false);
+        },
+        child: _premiumCard(child: Row(children: [
+          Icon(selected ? Icons.radio_button_checked : Icons.radio_button_off, color: selected ? Colors.blueAccent : Colors.black26),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14)), const SizedBox(height: 3), Text(subtitle, style: const TextStyle(color: Colors.black45, fontSize: 11, fontWeight: FontWeight.w600))])),
+          if (locked) const Icon(Icons.lock_outline, size: 18, color: Colors.black38),
+        ])),
       ),
     );
   }
 
   Widget _buildRgbMenu() {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
+    final percent = brightness.clamp(1, 100).round();
+    return ListView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 24),
       children: [
-        InkWell(
-          onTap: !isConnected ? null : () {
-            setState(() => isRgbOn = !isRgbOn);
-            sendCommand("RGBTOGGLE", showError: false);
-          },
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: isRgbOn ? Colors.black : Colors.white,
-              shape: BoxShape.circle,
-              border: Border.all(color: isRgbOn ? Colors.black : Colors.grey.shade300, width: 2),
-              boxShadow: isRgbOn ? [const BoxShadow(color: Colors.black26, blurRadius: 15)] : [],
-            ),
-            child: Icon(Icons.power_settings_new, color: isRgbOn ? Colors.white : Colors.grey, size: 40),
-          ),
+        _sectionTitle('LED Control', subtitle: 'Brightness 1–100%. Zero is reserved for LED OFF.'),
+        _premiumCard(
+          child: Column(children: [
+            Row(children: [
+              Container(width: 46, height: 46, decoration: BoxDecoration(shape: BoxShape.circle, color: isRgbOn ? Colors.black : Colors.black.withOpacity(0.06)), child: Icon(Icons.lightbulb_rounded, color: isRgbOn ? Colors.white : Colors.black38)),
+              const SizedBox(width: 13),
+              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('LED Power', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900)), SizedBox(height: 3), Text('RGB illumination', style: TextStyle(fontSize: 11, color: Colors.black45, fontWeight: FontWeight.w600))])),
+              Switch(value: isConnected && isRgbOn, activeColor: Colors.blueAccent, onChanged: isConnected ? (_) => sendCommand('RGBTOGGLE', showError: false) : null),
+            ]),
+            const Divider(height: 26),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              IconButton(icon: const Icon(Icons.chevron_left_rounded, size: 30), onPressed: isConnected ? () => sendCommand('RGBPREV', showError: false) : null),
+              Container(constraints: const BoxConstraints(minWidth: 110), padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFE4E4E6))), child: Text('Mode $rgbModeIndex', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15))),
+              IconButton(icon: const Icon(Icons.chevron_right_rounded, size: 30), onPressed: isConnected ? () => sendCommand('RGBNEXT', showError: false) : null),
+            ]),
+            const SizedBox(height: 8),
+            Row(children: [
+              const Icon(Icons.brightness_low_rounded, color: Colors.black38),
+              Expanded(child: Slider(value: brightness.clamp(1, 100).toDouble(), min: 1, max: 100, activeColor: Colors.black, inactiveColor: Colors.black12, onChanged: isConnected ? (val) => setState(() => brightness = val) : null, onChangeEnd: isConnected ? (val) {
+                final raw = (val / 100 * 255).round().clamp(1, 255);
+                sendCommand('BR:$raw', showError: false);
+              } : null)),
+              SizedBox(width: 46, child: Text('$percent%', textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w900))),
+            ]),
+          ]),
         ),
-        const SizedBox(height: 25),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back_ios, color: Colors.black87),
-              onPressed: isConnected ? () {
-                sendCommand("RGBPREV", showError: false);
-              } : null,
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 10),
-              decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(15)),
-              child: Text("Mode $rgbModeIndex", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            ),
-            IconButton(
-              icon: const Icon(Icons.arrow_forward_ios, color: Colors.black87),
-              onPressed: isConnected ? () {
-                sendCommand("RGBNEXT", showError: false);
-              } : null,
-            ),
-          ],
-        ),
-        const SizedBox(height: 25),
-        Row(
-          children: [
-            const Icon(Icons.brightness_low, color: Colors.grey),
-            Expanded(
-              child: Slider(
-                value: brightness, 
-                min: 1, 
-                max: 255, 
-                activeColor: Colors.black, 
-                inactiveColor: Colors.grey.shade300,
-                onChangeEnd: isConnected
-                    ? (val) => sendCommand("BR:${val.toInt()}", showError: false)
-                    : null,
-                onChanged: isConnected
-                    ? (val) => setState(() => brightness = val)
-                    : null,
-              ),
-            ),
-            Text(
-              isConnected
-                  ? "${(brightness / 255 * 100).toInt()}%"
-                  : "--",
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-          ],
-        )
       ],
     );
   }
 
   Widget _buildTempSettingMenu() {
-    final batteryRangeText =
-        '$limitBat5v°C → $limitBat9vMin–$limitBat9vMax°C → $limitBat12v°C';
-
+    final midLow = limitBat9vMin;
+    final midHigh = limitBat9vMax;
     return ListView(
       physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 24),
       children: [
-        const SizedBox(height: 6),
-        const Text(
-          'Hotside Protection',
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-            color: Colors.black54,
-          ),
-        ),
-        _tempAdjusterTile(
-          'Hotside Overheat Limit',
-          limitHot,
-          (v) {
-            if (!isConnected) {
-              return;
-            }
-
-            final next = v.clamp(35, 80).toInt();
-            if (next == limitHot) {
-              return;
-            }
-
-            setState(() {
-              limitHot = next;
-            });
-
-            sendCommand(
-              'LHT:$next',
-              showError: false,
-            );
-          },
-          '°C',
-          35,
-          80,
-        ),
-        const SizedBox(height: 10),
-        const Divider(),
-        const SizedBox(height: 8),
-        const Text(
-          'Battery Temperature → Voltage',
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-            color: Colors.black54,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade100,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: Colors.grey.shade300,
-            ),
-          ),
-          child: Column(
-            children: [
-              _batteryLimitRow(
-                title: '5V',
-                subtitle: 'Below',
-                value: limitBat5v,
-                enabled: isConnected,
-                onMinus: () {
-                  if (!isConnected) return;
-                  final next = (limitBat5v - 1).clamp(10, 59).toInt();
-                  setState(() {
-                    limitBat5v = next;
-                    _normalizeBatteryLimits(changed: 5);
-                  });
-                  _sendBatteryLimitSettings();
-                },
-                onPlus: () {
-                  if (!isConnected) return;
-                  final next = (limitBat5v + 1).clamp(10, 59).toInt();
-                  if (next >= limitBat12v - 1) return;
-                  setState(() {
-                    limitBat5v = next;
-                    _normalizeBatteryLimits(changed: 5);
-                  });
-                  _sendBatteryLimitSettings();
-                },
-              ),
-              const Divider(height: 18),
-              _batteryLimitRangeRow(
-                title: '9V',
-                subtitle: 'Automatic range • LOCKED',
-                low: limitBat9vMin,
-                high: limitBat9vMax,
-              ),
-              const Divider(height: 18),
-              _batteryLimitRow(
-                title: '12V',
-                subtitle: 'At / Above',
-                value: limitBat12v,
-                enabled: isConnected,
-                onMinus: () {
-                  if (!isConnected) return;
-                  final next = (limitBat12v - 1).clamp(11, 60).toInt();
-                  if (next <= limitBat5v + 1) return;
-                  setState(() {
-                    limitBat12v = next;
-                    _normalizeBatteryLimits(changed: 12);
-                  });
-                  _sendBatteryLimitSettings();
-                },
-                onPlus: () {
-                  if (!isConnected) return;
-                  final next = (limitBat12v + 1).clamp(11, 60).toInt();
-                  setState(() {
-                    limitBat12v = next;
-                    _normalizeBatteryLimits(changed: 12);
-                  });
-                  _sendBatteryLimitSettings();
-                },
-              ),
-              const SizedBox(height: 10),
-              Text(
-                '9V range is locked between the 5V and 12V thresholds • Current: $batteryRangeText',
-                style: TextStyle(
-                  color: Colors.grey.shade600,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.redAccent.withOpacity(0.1),
-            foregroundColor: Colors.red,
-            elevation: 0,
-            padding: const EdgeInsets.symmetric(vertical: 12),
-          ),
-          onPressed: isConnected
-              ? resetTempSettings
-              : null,
-          icon: const Icon(Icons.restore),
-          label: const Text(
-            'Reset to Default Settings',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ),
-        const SizedBox(height: 20),
+        _sectionTitle('Temperature', subtitle: 'Protection limits are applied by the ESP32 in real time.'),
+        _premiumCard(child: _tempAdjusterTile('Hotside Overheat Limit', limitHot, (v) {
+          if (!isConnected) return;
+          final next = v.clamp(30, 60).toInt();
+          if (next == limitHot) return;
+          setState(() => limitHot = next);
+          sendCommand('LHT:$next', showError: false);
+        }, '°C', 30, 60)),
+        _sectionTitle('Battery Protection', subtitle: '9V is automatically centered between the 5V and 12V thresholds.'),
+        _premiumCard(child: Column(children: [
+          _batteryLimitRow(title: '5V', subtitle: '< $limitBat5v°C  •  Below', value: limitBat5v, enabled: isConnected, onMinus: () { if (!isConnected) return; setState(() { limitBat5v = (limitBat5v - 1).clamp(20, 48).toInt(); _normalizeBatteryLimits(changed: 5); }); _sendBatteryLimitSettings(); }, onPlus: () { if (!isConnected) return; final next = (limitBat5v + 1).clamp(20, 48).toInt(); if (next >= limitBat12v - 1) return; setState(() { limitBat5v = next; _normalizeBatteryLimits(changed: 5); }); _sendBatteryLimitSettings(); }),
+          const Divider(height: 24),
+          _batteryLimitRangeRow(title: '9V', subtitle: '≈ $midLow–$midHigh°C  •  Around  •  LOCKED', low: midLow, high: midHigh),
+          const Divider(height: 24),
+          _batteryLimitRow(title: '12V', subtitle: '> $limitBat12v°C  •  Above', value: limitBat12v, enabled: isConnected, onMinus: () { if (!isConnected) return; final next = (limitBat12v - 1).clamp(22, 50).toInt(); if (next <= limitBat5v + 1) return; setState(() { limitBat12v = next; _normalizeBatteryLimits(changed: 12); }); _sendBatteryLimitSettings(); }, onPlus: () { if (!isConnected) return; final next = (limitBat12v + 1).clamp(22, 50).toInt(); setState(() { limitBat12v = next; _normalizeBatteryLimits(changed: 12); }); _sendBatteryLimitSettings(); }),
+          const SizedBox(height: 10),
+          const Text('Adjustable range: 20°C–50°C  •  9V range is derived automatically', textAlign: TextAlign.center, style: TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700)),
+        ])),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(style: OutlinedButton.styleFrom(foregroundColor: Colors.redAccent, side: const BorderSide(color: Color(0x33FF5252)), padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))), onPressed: isConnected ? resetTempSettings : null, icon: const Icon(Icons.restart_alt_rounded), label: const Text('Reset to Defaults', style: TextStyle(fontWeight: FontWeight.w800))),
       ],
     );
   }
 
-  Widget _batteryLimitRangeRow({
-    required String title,
-    required String subtitle,
-    required int low,
-    required int high,
-  }) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 44,
-          child: Text(
-            title,
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w900,
-              color: Colors.grey,
-            ),
-          ),
-        ),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '$low–$high°C',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  color: Colors.grey.shade600,
-                  fontSize: 10,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 96),
-      ],
-    );
+  Widget _batteryLimitRangeRow({required String title, required String subtitle, required int low, required int high}) {
+    return Row(children: [
+      SizedBox(width: 52, child: Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.black45))),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('≈ $low–$high°C', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)), const SizedBox(height: 2), Text(subtitle, style: const TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700))])),
+      const Icon(Icons.lock_outline, size: 19, color: Colors.black26),
+    ]);
   }
 
-  Widget _batteryLimitRow({
-    required String title,
-    required String subtitle,
-    required int value,
-    required bool enabled,
-    VoidCallback? onMinus,
-    VoidCallback? onPlus,
-  }) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 44,
-          child: Text(
-            title,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w900,
-              color: enabled
-                  ? Colors.blueAccent
-                  : Colors.grey,
-            ),
-          ),
-        ),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '$value°C',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  color: Colors.grey.shade600,
-                  fontSize: 10,
-                ),
-              ),
-            ],
-          ),
-        ),
-        IconButton(
-          onPressed: enabled ? onMinus : null,
-          icon: const Icon(
-            Icons.remove_circle_outline,
-          ),
-        ),
-        IconButton(
-          onPressed: enabled ? onPlus : null,
-          icon: const Icon(
-            Icons.add_circle_outline,
-          ),
-        ),
-      ],
-    );
+  Widget _batteryLimitRow({required String title, required String subtitle, required int value, required bool enabled, VoidCallback? onMinus, VoidCallback? onPlus}) {
+    return Row(children: [
+      SizedBox(width: 52, child: Text(title, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: enabled ? Colors.blueAccent : Colors.black26))),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('$value°C', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)), const SizedBox(height: 2), Text(subtitle, style: const TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700))])),
+      IconButton(onPressed: enabled ? onMinus : null, icon: const Icon(Icons.remove_circle_outline_rounded), color: Colors.black54),
+      IconButton(onPressed: enabled ? onPlus : null, icon: const Icon(Icons.add_circle_outline_rounded), color: Colors.black54),
+    ]);
   }
 
-  Widget _tempAdjusterTile(
-    String label,
-    int value,
-    void Function(int) onChanged,
-    String unit,
-    [int? minValue, int? maxValue]
-  ) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
-          Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.remove_circle_outline, color: Colors.black54),
-                onPressed: minValue != null && value <= minValue
-                    ? null
-                    : () => onChanged(value - 1),
-              ),
-              SizedBox(
-                width: 45,
-                child: Center(
-                  child: Text(
-                    "$value$unit",
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 15,
-                      color: Colors.blueAccent,
-                    ),
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.add_circle_outline, color: Colors.black54),
-                onPressed: maxValue != null && value >= maxValue
-                    ? null
-                    : () => onChanged(value + 1),
-              ),
-            ],
-          )
-        ],
-      ),
-    );
+  Widget _tempAdjusterTile(String label, int value, void Function(int) onChanged, String unit, int minValue, int maxValue) {
+    return Row(children: [
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14)), const SizedBox(height: 3), Text('Range $minValue–$maxValue$unit', style: const TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700))])),
+      IconButton(icon: const Icon(Icons.remove_circle_outline_rounded), color: Colors.black54, onPressed: value <= minValue ? null : () => onChanged(value - 1)),
+      Container(width: 72, padding: const EdgeInsets.symmetric(vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(13), border: Border.all(color: const Color(0xFFE3E3E5))), child: Text('$value$unit', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: Colors.blueAccent))),
+      IconButton(icon: const Icon(Icons.add_circle_outline_rounded), color: Colors.black54, onPressed: value >= maxValue ? null : () => onChanged(value + 1)),
+    ]);
   }
 }
 
