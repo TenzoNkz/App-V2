@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -12,18 +11,15 @@ import 'package:permission_handler/permission_handler.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
   try {
     await Firebase.initializeApp();
   } catch (e) {
     debugPrint("Firebase Init Error: $e");
   }
-
   runApp(const HorizonCoolerApp());
 }
 
-/// Backwards-compatible alias for projects/tests that still use
-/// the default Flutter template name.
+/// Backwards-compatible alias for projects/tests that still use the default Flutter template name.
 typedef MyApp = HorizonCoolerApp;
 
 class HorizonCoolerApp extends StatelessWidget {
@@ -36,7 +32,7 @@ class HorizonCoolerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primaryColor: Colors.blueAccent,
-        scaffoldBackgroundColor: const Color(0xFF111113),
+        scaffoldBackgroundColor: const Color(0xFF111113), 
         useMaterial3: true,
         fontFamily: 'Roboto',
       ),
@@ -56,75 +52,59 @@ class _DashboardScreenState extends State<DashboardScreen> {
   BluetoothDevice? targetDevice;
   BluetoothCharacteristic? txChar;
   BluetoothCharacteristic? rxChar;
-
-  StreamSubscription<BluetoothConnectionState>?
-      connectionSubscription;
+  
+  StreamSubscription<BluetoothConnectionState>? connectionSubscription;
   StreamSubscription<List<int>>? dataSubscription;
-  StreamSubscription<DatabaseEvent>?
-      _firebaseConnectionSubscription;
+  StreamSubscription<DatabaseEvent>? _firebaseConnectionSubscription;
 
   bool _connectionEverEstablished = false;
-
-  Future<void> _commandWriteQueue =
-      Future<void>.value();
-
+  Future<void> _commandWriteQueue = Future<void>.value();
   double _lastSentPhoneBatteryTemp = -999.0;
-
+  int _lastBatteryProtectionLevel = -1;
+  bool _syncFrameReceived = false;
+  bool _syncInProgress = false;
+  bool _isInitialSync = false;
+  bool _isBatteryReadBusy = false;
+  
   bool isConnected = false;
 
-  final String serviceUUID =
-      "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d";
+  final String serviceUUID = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"; 
+  final String charRxUUID  = "b2c3d4e5-f6a7-4b5c-8d9e-1f2a3b4c5d6e"; 
+  final String charTxUUID  = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
 
-  final String charRxUUID =
-      "b2c3d4e5-f6a7-4b5c-8d9e-1f2a3b4c5d6e";
-
-  final String charTxUUID =
-      "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
-
-  String hotsideTemp = "--";
+  String hotsideTemp = "--"; 
   String voltage = "5V";
-
   bool isRgbOn = true;
   bool isAiModeOn = false;
-
   double brightness = 255;
-
   String currentVersion = "V?";
   int rgbModeIndex = 0;
-
+  
   bool isCloudSyncing = false;
-
   DatabaseReference? _dbRef;
+  final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
-  final String firebaseDbUrl =
-      "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
-
-  int selectedMenuIndex = 0;
-
+  int selectedMenuIndex = 0; 
   double phoneBatteryTemp = -1.0;
-  bool phoneBatteryTempAvailable = false;
-
+  bool phoneBatteryTempAvailable = false; 
   Timer? _batteryTempTimer;
-
   int aiModeType = 0;
 
   int limitHot = 45;
   int limitBat5v = 25;
-  int limitBat9v = 30;
   int limitBat12v = 35;
 
-  String _incomingBuffer = "";
+  int get limitBat9v =>
+      ((limitBat5v + limitBat12v) / 2).round();
 
-  static const platformChannel =
-      MethodChannel('horizon_cooler/battery_temp');
+  String _incomingBuffer = "";
+  static const platformChannel = MethodChannel('horizon_cooler/battery_temp');
 
   @override
   void initState() {
     super.initState();
-
     _initFirebaseSafe();
     _requestPermissions();
-
     _fetchBatteryTemperature();
     _startRealtimeBatteryTempReader();
   }
@@ -133,98 +113,71 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void dispose() {
     connectionSubscription?.cancel();
     dataSubscription?.cancel();
-
     targetDevice?.disconnect();
-
     _batteryTempTimer?.cancel();
-
+    _limitSendDebounce?.cancel();
     _firebaseConnectionSubscription?.cancel();
-
     super.dispose();
   }
 
   void _initFirebaseSafe() {
     try {
       _dbRef = FirebaseDatabase.instanceFor(
-        app: Firebase.app(),
-        databaseURL: firebaseDbUrl,
+        app: Firebase.app(), 
+        databaseURL: firebaseDbUrl
       ).ref();
-
       _initFirebaseMonitoring();
     } catch (e) {
-      debugPrint(
-        "Firebase Database Unavailable: $e",
-      );
+      debugPrint("Firebase Database Unavailable: $e");
     }
   }
 
   Future<void> _fetchBatteryTemperature() async {
+    if (_isBatteryReadBusy) {
+      return;
+    }
+
+    _isBatteryReadBusy = true;
+
     try {
-      final result =
-          await platformChannel.invokeMethod<dynamic>(
+      final result = await platformChannel.invokeMethod<dynamic>(
         'getBatteryTemperature',
       );
 
-      final nativeTemp =
-          result is num
-              ? result.toDouble()
-              : -1.0;
-
-      final valid =
-          nativeTemp >= 0.0 &&
-          nativeTemp <= 100.0;
+      final nativeTemp = result is num ? result.toDouble() : -1.0;
+      final valid = nativeTemp >= 0.0 && nativeTemp <= 100.0;
 
       if (!mounted) {
         return;
       }
 
       if (valid) {
-        final changed =
-            !phoneBatteryTempAvailable ||
-            (nativeTemp - phoneBatteryTemp)
-                    .abs() >=
-                0.1;
-
-        if (changed) {
+        if ((nativeTemp - phoneBatteryTemp).abs() >= 0.1 ||
+            !phoneBatteryTempAvailable) {
           setState(() {
             phoneBatteryTemp = nativeTemp;
             phoneBatteryTempAvailable = true;
           });
         }
 
-        if (
-          isConnected &&
-          aiModeType == 1 &&
-          (nativeTemp -
-                      _lastSentPhoneBatteryTemp)
-                  .abs() >=
-              0.2
-        ) {
-          _lastSentPhoneBatteryTemp =
-              nativeTemp;
+        if (isConnected && isAiModeOn && aiModeType == 1) {
+          final protectionLevel = _batteryProtectionLevel(nativeTemp);
 
-          await sendCommand(
-            'BTP:${nativeTemp.toStringAsFixed(1)}',
-          );
+          if (protectionLevel != _lastBatteryProtectionLevel) {
+            _lastBatteryProtectionLevel = protectionLevel;
+            _lastSentPhoneBatteryTemp = nativeTemp;
+            await sendCommand(
+              'BTP:${nativeTemp.toStringAsFixed(1)}',
+              showError: false,
+            );
+          }
         }
 
-        if (
-          isCloudSyncing &&
-          _dbRef != null
-        ) {
-          await _dbRef!
-              .child(
-                'telemetry/battery_temp',
-              )
-              .set(
-                nativeTemp.toStringAsFixed(1),
-              );
-
-          await _dbRef!
-              .child(
-                'telemetry/battery_temp_available',
-              )
-              .set(true);
+        if (isCloudSyncing && _dbRef != null) {
+          await _dbRef!.child('telemetry/battery_temp').set(
+            nativeTemp.toStringAsFixed(1),
+          );
+          await _dbRef!.child('telemetry/battery_temp_available').set(true);
         }
       } else {
         if (phoneBatteryTempAvailable) {
@@ -233,146 +186,177 @@ class _DashboardScreenState extends State<DashboardScreen> {
           });
         }
 
-        if (
-          isCloudSyncing &&
-          _dbRef != null
-        ) {
-          await _dbRef!
-              .child(
-                'telemetry/battery_temp',
-              )
-              .set(null);
+        if (isConnected &&
+            isAiModeOn &&
+            aiModeType == 1 &&
+            _lastBatteryProtectionLevel != 0) {
+          _lastBatteryProtectionLevel = 0;
+          await sendCommand(
+            'BTP:-10.0',
+            showError: false,
+          );
+        }
 
-          await _dbRef!
-              .child(
-                'telemetry/battery_temp_available',
-              )
-              .set(false);
+        if (isCloudSyncing && _dbRef != null) {
+          await _dbRef!.child('telemetry/battery_temp').set(null);
+          await _dbRef!.child('telemetry/battery_temp_available').set(false);
         }
       }
     } catch (e) {
-      debugPrint(
-        'Direct battery fetch error: $e',
-      );
+      debugPrint('Direct battery fetch error: $e');
 
-      if (!mounted) {
-        return;
-      }
-
-      if (phoneBatteryTempAvailable) {
+      if (mounted && phoneBatteryTempAvailable) {
         setState(() {
           phoneBatteryTempAvailable = false;
         });
       }
+    } finally {
+      _isBatteryReadBusy = false;
     }
   }
 
+  int _batteryProtectionLevel(double temperature) {
+    if (temperature < limitBat5v) {
+      return 0;
+    }
+
+    if (temperature >= limitBat12v) {
+      return 2;
+    }
+
+    return 1;
+  }
+
   void _startRealtimeBatteryTempReader() {
+    _batteryTempTimer?.cancel();
     _batteryTempTimer = Timer.periodic(
-      const Duration(seconds: 2),
-      (_) async {
-        await _fetchBatteryTemperature();
+      const Duration(seconds: 1),
+      (_) {
+        _fetchBatteryTemperature();
       },
     );
   }
 
-  Future<void> _requestPermissions() async {
+  Future<void> _requestPermissions({
+    bool showResult = false,
+  }) async {
     if (!Platform.isAndroid) {
       return;
     }
 
     try {
-      final scan =
-          await Permission.bluetoothScan.request();
+      final scanStatus = await Permission.bluetoothScan.request();
+      final connectStatus = await Permission.bluetoothConnect.request();
+      final locationStatus =
+          await Permission.locationWhenInUse.request();
 
-      final connect =
-          await Permission.bluetoothConnect.request();
-
-      // Android 11 and below require location permission
-      // for BLE scans.
-      if (
-        !scan.isGranted ||
-        !connect.isGranted
-      ) {
-        await Permission.locationWhenInUse
-            .request();
-      }
-
-      final adapterState =
+      BluetoothAdapterState adapterState =
           await FlutterBluePlus.adapterState.first;
 
-      if (
-        adapterState ==
-        BluetoothAdapterState.off
-      ) {
-        await FlutterBluePlus.turnOn();
+      if (adapterState == BluetoothAdapterState.off) {
+        try {
+          await FlutterBluePlus.turnOn();
+          adapterState =
+              await FlutterBluePlus.adapterState.first;
+        } catch (e) {
+          debugPrint('Bluetooth turn-on error: $e');
+        }
+      }
+
+      if (showResult && mounted) {
+        final bluetoothReady =
+            (scanStatus.isGranted && connectStatus.isGranted) &&
+            adapterState == BluetoothAdapterState.on;
+        final locationReady = locationStatus.isGranted;
+
+        _showSnackBar(
+          'Bluetooth ${bluetoothReady ? "ON" : "perlu izin"} • '
+          'Location ${locationReady ? "ON" : "perlu izin"}',
+          color: bluetoothReady && locationReady
+              ? Colors.green
+              : Colors.orangeAccent,
+        );
       }
     } catch (e) {
-      debugPrint(
-        'Bluetooth permission/setup error: $e',
+      debugPrint('Bluetooth/Location permission error: $e');
+    }
+  }
+
+  Future<void> _enableBluetoothFromPopup() async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+
+    await _requestPermissions(showResult: true);
+  }
+
+  Future<void> _enableLocationFromPopup() async {
+    if (!Platform.isAndroid) {
+      return;
+    }
+
+    try {
+      await Permission.locationWhenInUse.request();
+      final result = await platformChannel.invokeMethod<bool>(
+        'openLocationSettings',
       );
+
+      if (result != true && mounted) {
+        _showSnackBar(
+          'Unable to open Location Settings',
+          color: Colors.redAccent,
+        );
+      }
+    } catch (e) {
+      debugPrint('Location settings error: $e');
+    }
+  }
+
+  Future<bool> _isLocationGranted() async {
+    if (!Platform.isAndroid) {
+      return true;
+    }
+
+    final permission =
+        await Permission.locationWhenInUse.status;
+
+    if (!permission.isGranted) {
+      return false;
+    }
+
+    try {
+      final enabled = await platformChannel.invokeMethod<bool>(
+        'isLocationServiceEnabled',
+      );
+      return enabled == true;
+    } catch (_) {
+      return false;
     }
   }
 
   void _initFirebaseMonitoring() {
-    if (_dbRef == null) {
-      return;
-    }
-
-    _firebaseConnectionSubscription
-        ?.cancel();
-
-    _firebaseConnectionSubscription =
-        _dbRef!
-            .child('.info/connected')
-            .onValue
-            .listen(
-      (event) {
-        if (!mounted) {
-          return;
-        }
-
-        final value =
-            event.snapshot.value;
-
-        setState(() {
-          isCloudSyncing =
-              value is bool && value;
-        });
-      },
-    );
+    if (_dbRef == null) return;
+    _firebaseConnectionSubscription?.cancel();
+    _firebaseConnectionSubscription = _dbRef!.child('.info/connected').onValue.listen((event) {
+      if (!mounted) return;
+      final value = event.snapshot.value;
+      setState(() {
+        isCloudSyncing = value is bool && value;
+      });
+    });
   }
 
-  void _showSnackBar(
-    String message, {
-    Color color = Colors.blueAccent,
-  }) {
-    if (!mounted) {
-      return;
-    }
-
-    ScaffoldMessenger.of(context)
-        .hideCurrentSnackBar();
-
-    ScaffoldMessenger.of(context)
-        .showSnackBar(
+  void _showSnackBar(String message, {Color color = Colors.blueAccent}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          message,
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
+        content: Text(message, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius:
-              BorderRadius.circular(10),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(10),
-        duration:
-            const Duration(seconds: 2),
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -380,203 +364,203 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void showBluetoothMenu() {
     showModalBottomSheet(
       context: context,
-      backgroundColor:
-          const Color(0xFF15161E),
-      shape:
-          const RoundedRectangleBorder(
-        borderRadius:
-            BorderRadius.vertical(
+      backgroundColor: const Color(0xFF15161E),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
           top: Radius.circular(25),
         ),
       ),
       builder: (context) {
         return SizedBox(
-          height:
-              MediaQuery.of(context)
-                      .size
-                      .height *
-                  0.5,
+          height: MediaQuery.of(context).size.height * 0.65,
           child: Column(
             children: [
               Container(
-                padding:
-                    const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 15,
-                ),
-                decoration:
-                    const BoxDecoration(
-                  color:
-                      Color(0xFF1E202B),
-                  borderRadius:
-                      BorderRadius.vertical(
-                    top:
-                        Radius.circular(25),
+                padding: const EdgeInsets.fromLTRB(20, 15, 10, 15),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF1E202B),
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(25),
                   ),
                 ),
-                child: Row(
-                  mainAxisAlignment:
-                      MainAxisAlignment
-                          .spaceBetween,
+                child: Column(
                   children: [
-                    const Text(
-                      "Select Device",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight:
-                            FontWeight.bold,
-                      ),
-                    ),
-                    StreamBuilder<bool>(
-                      stream:
-                          FlutterBluePlus
-                              .isScanning,
-                      initialData: false,
-                      builder:
-                          (c, snapshot) {
-                        if (
-                          snapshot.data ==
-                          true
-                        ) {
-                          return const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child:
-                                CircularProgressIndicator(
-                              color:
-                                  Colors.blueAccent,
-                              strokeWidth: 2,
-                            ),
-                          );
-                        }
-
-                        return IconButton(
-                          icon:
-                              const Icon(
-                            Icons.refresh,
-                            color:
-                                Colors.blueAccent,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Bluetooth & Location',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
                           ),
-                          onPressed:
-                              _startSafeScan,
-                        );
-                      },
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.close,
+                            color: Colors.white70,
+                          ),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FutureBuilder<bool>(
+                            future: _isBluetoothReady(),
+                            builder: (context, snapshot) {
+                              final ready = snapshot.data == true;
+                              return OutlinedButton.icon(
+                                onPressed: _enableBluetoothFromPopup,
+                                icon: Icon(
+                                  ready
+                                      ? Icons.bluetooth_connected
+                                      : Icons.bluetooth_disabled,
+                                  color: ready
+                                      ? Colors.greenAccent
+                                      : Colors.orangeAccent,
+                                ),
+                                label: Text(
+                                  ready
+                                      ? 'Bluetooth ON'
+                                      : 'Enable Bluetooth',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FutureBuilder<bool>(
+                            future: _isLocationGranted(),
+                            builder: (context, snapshot) {
+                              final ready = snapshot.data == true;
+                              return OutlinedButton.icon(
+                                onPressed: _enableLocationFromPopup,
+                                icon: Icon(
+                                  ready
+                                      ? Icons.location_on
+                                      : Icons.location_off,
+                                  color: ready
+                                      ? Colors.greenAccent
+                                      : Colors.orangeAccent,
+                                ),
+                                label: Text(
+                                  ready
+                                      ? 'Location ON'
+                                      : 'Enable Location',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Select Device',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        StreamBuilder<bool>(
+                          stream: FlutterBluePlus.isScanning,
+                          initialData: false,
+                          builder: (c, snapshot) {
+                            if (snapshot.data == true) {
+                              return const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  color: Colors.blueAccent,
+                                  strokeWidth: 2,
+                                ),
+                              );
+                            }
+                            return IconButton(
+                              icon: const Icon(
+                                Icons.refresh,
+                                color: Colors.blueAccent,
+                              ),
+                              onPressed: _startSafeScan,
+                            );
+                          },
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
               Expanded(
-                child: StreamBuilder<
-                    List<ScanResult>>(
-                  stream:
-                      FlutterBluePlus
-                          .scanResults,
+                child: StreamBuilder<List<ScanResult>>(
+                  stream: FlutterBluePlus.scanResults,
                   initialData: const [],
-                  builder:
-                      (c, snapshot) {
-                    final results =
-                        snapshot.data ??
-                            [];
+                  builder: (c, snapshot) {
+                    final results = snapshot.data ?? [];
+                    final horizonDevices = results.where((r) {
+                      final devName = r.device.platformName.isNotEmpty
+                          ? r.device.platformName
+                          : r.advertisementData.advName;
+                      return devName.trim().isNotEmpty &&
+                          devName.toUpperCase().contains('HORIZON');
+                    }).toList();
 
-                    final horizonDevices =
-                        results.where(
-                      (r) {
-                        String devName =
-                            r.device.platformName
-                                    .isNotEmpty
-                                ? r.device
-                                    .platformName
-                                : r
-                                    .advertisementData
-                                    .advName;
-
-                        if (
-                          devName
-                              .trim()
-                              .isEmpty
-                        ) {
-                          return false;
-                        }
-
-                        return devName
-                            .toUpperCase()
-                            .contains(
-                              "HORIZON",
-                            );
-                      },
-                    ).toList();
-
-                    if (
-                      horizonDevices
-                          .isEmpty
-                    ) {
+                    if (horizonDevices.isEmpty) {
                       return const Center(
                         child: Text(
-                          "Scanning for Horizon Cooler...",
-                          style: TextStyle(
-                            color:
-                                Colors.grey,
-                          ),
+                          'Scanning for Horizon Cooler...',
+                          style: TextStyle(color: Colors.grey),
                         ),
                       );
                     }
 
                     return ListView.builder(
-                      itemCount:
-                          horizonDevices
-                              .length,
-                      itemBuilder:
-                          (context, index) {
-                        final r =
-                            horizonDevices[
-                                index];
-
-                        String devName =
-                            r.device.platformName
-                                    .isNotEmpty
-                                ? r.device
-                                    .platformName
-                                : r
-                                    .advertisementData
-                                    .advName;
+                      itemCount: horizonDevices.length,
+                      itemBuilder: (context, index) {
+                        final r = horizonDevices[index];
+                        final devName = r.device.platformName.isNotEmpty
+                            ? r.device.platformName
+                            : r.advertisementData.advName;
 
                         return ListTile(
-                          leading:
-                              const Icon(
+                          leading: const Icon(
                             Icons.bluetooth,
-                            color:
-                                Colors.blueAccent,
+                            color: Colors.blueAccent,
                           ),
                           title: Text(
                             devName,
-                            style:
-                                const TextStyle(
-                              color:
-                                  Colors.white,
-                              fontWeight:
-                                  FontWeight
-                                      .bold,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                           subtitle: Text(
-                            r.device.remoteId
-                                .toString(),
-                            style:
-                                const TextStyle(
-                              color:
-                                  Colors.grey,
+                            r.device.remoteId.toString(),
+                            style: const TextStyle(
+                              color: Colors.grey,
                               fontSize: 11,
                             ),
                           ),
                           onTap: () {
-                            Navigator.pop(
-                              context,
-                            );
-
-                            connectToDevice(
-                              r.device,
-                            );
+                            Navigator.pop(context);
+                            connectToDevice(r.device);
                           },
                         );
                       },
@@ -597,238 +581,124 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _startSafeScan() async {
     await _requestPermissions();
-
     try {
-      await FlutterBluePlus.startScan(
-        timeout:
-            const Duration(seconds: 15),
-      );
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
     } catch (e) {
-      debugPrint(
-        'BLE scan start error: $e',
-      );
+      debugPrint('BLE scan start error: $e');
     }
   }
 
-  Future<void> connectToDevice(
-    BluetoothDevice device,
-  ) async {
-    _showSnackBar(
-      'Connecting...',
-      color: Colors.blueGrey,
-    );
-
+  Future<void> connectToDevice(BluetoothDevice device) async {
+    _showSnackBar('Connecting...', color: Colors.blueGrey);
     try {
       await FlutterBluePlus.stopScan();
-
-      await connectionSubscription
-          ?.cancel();
-
+      await connectionSubscription?.cancel();
       await dataSubscription?.cancel();
 
-      if (
-        targetDevice != null &&
-        targetDevice != device
-      ) {
+      if (targetDevice != null && targetDevice != device) {
         try {
           await targetDevice!.disconnect();
         } catch (e) {
-          debugPrint(
-            'Previous BLE device disconnect error: $e',
-          );
+          debugPrint('Previous BLE device disconnect error: $e');
         }
       }
 
       targetDevice = device;
-
       txChar = null;
       rxChar = null;
-
-      _connectionEverEstablished =
-          false;
-
+      _connectionEverEstablished = false;
       _incomingBuffer = '';
 
-      connectionSubscription =
-          device.connectionState.listen(
-        (state) async {
-          if (
-            state ==
-            BluetoothConnectionState
-                .connected
-          ) {
-            _connectionEverEstablished =
-                true;
-
-            if (mounted) {
-              setState(() {
-                isConnected = true;
-              });
-            }
-
-            if (Platform.isAndroid) {
-              try {
-                await device.requestMtu(
-                  512,
-                );
-              } catch (e) {
-                debugPrint(
-                  'MTU request error: $e',
-                );
-              }
-            }
-
-            await discoverServices(
-              device,
-            );
-          } else if (
-            state ==
-            BluetoothConnectionState
-                .disconnected
-          ) {
-            await dataSubscription
-                ?.cancel();
-
-            dataSubscription = null;
-
-            if (mounted) {
-              setState(() {
-                isConnected = false;
-
-                txChar = null;
-                rxChar = null;
-
-                hotsideTemp = '--';
-                voltage = '--';
-
-                isAiModeOn = false;
-
-                currentVersion = 'V?';
-
-                _incomingBuffer = '';
-
-                _lastSentPhoneBatteryTemp =
-                    -999.0;
-
-                phoneBatteryTempAvailable =
-                    false;
-              });
-            }
-
-            if (
-              _connectionEverEstablished
-            ) {
-              _showSnackBar(
-                'Connection Lost',
-                color:
-                    Colors.redAccent,
-              );
+      connectionSubscription = device.connectionState.listen((state) async {
+        if (state == BluetoothConnectionState.connected) {
+          _connectionEverEstablished = true;
+          if (mounted) {
+            setState(() {
+              isConnected = false;
+              _syncFrameReceived = false;
+              _syncInProgress = true;
+              _isInitialSync = true;
+              _lastBatteryProtectionLevel = -1;
+            });
+          }
+          if (Platform.isAndroid) {
+            try {
+              await device.requestMtu(512);
+            } catch (e) {
+              debugPrint('MTU request error: $e');
             }
           }
-        },
-      );
+          await discoverServices(device);
+        } else if (state == BluetoothConnectionState.disconnected) {
+          await dataSubscription?.cancel();
+          dataSubscription = null;
+          if (mounted) {
+            setState(() {
+              isConnected = false;
+              txChar = null;
+              rxChar = null;
+              hotsideTemp = '--';
+              voltage = '--';
+              isAiModeOn = false;
+              currentVersion = 'V?';
+              _incomingBuffer = '';
+              _lastSentPhoneBatteryTemp = -999.0;
+              _lastBatteryProtectionLevel = -1;
+              _syncFrameReceived = false;
+              _syncInProgress = false;
+              _isInitialSync = false;
+            });
+          }
+          if (_connectionEverEstablished) {
+            _showSnackBar('Connection Lost', color: Colors.redAccent);
+          }
+        }
+      });
 
-      await device.connect(
-        autoConnect: false,
-        timeout:
-            const Duration(seconds: 10),
-      );
+      await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
     } catch (e) {
-      _connectionEverEstablished =
-          false;
-
+      _connectionEverEstablished = false;
       if (mounted) {
         setState(() {
           isConnected = false;
-
           txChar = null;
           rxChar = null;
         });
       }
-
-      _showSnackBar(
-        'Failed to connect!',
-        color: Colors.redAccent,
-      );
-
+      _showSnackBar('Failed to connect!', color: Colors.redAccent);
       try {
         await device.disconnect();
       } catch (e) {
-        debugPrint(
-          'BLE disconnect after connection failure: $e',
-        );
+        debugPrint('BLE disconnect after connection failure: $e');
       }
     }
   }
 
-  Future<void> discoverServices(
-    BluetoothDevice device,
-  ) async {
+  Future<void> discoverServices(BluetoothDevice device) async {
     try {
-      final services =
-          await device.discoverServices();
+      final services = await device.discoverServices();
+      BluetoothCharacteristic? discoveredTx;
+      BluetoothCharacteristic? discoveredRx;
 
-      BluetoothCharacteristic?
-          discoveredTx;
-
-      BluetoothCharacteristic?
-          discoveredRx;
-
-      for (
-        final service in services
-      ) {
-        if (
-          service.uuid
-                  .toString()
-                  .toLowerCase() !=
-              serviceUUID.toLowerCase()
-        ) {
-          continue;
-        }
-
-        for (
-          final characteristic
-              in service.characteristics
-        ) {
-          final id =
-              characteristic.uuid
-                  .toString()
-                  .toLowerCase();
-
-          if (
-            id ==
-            charTxUUID.toLowerCase()
-          ) {
-            discoveredTx =
-                characteristic;
-          } else if (
-            id ==
-            charRxUUID.toLowerCase()
-          ) {
-            discoveredRx =
-                characteristic;
+      for (final service in services) {
+        if (service.uuid.toString().toLowerCase() != serviceUUID.toLowerCase()) continue;
+        for (final characteristic in service.characteristics) {
+          final id = characteristic.uuid.toString().toLowerCase();
+          if (id == charTxUUID.toLowerCase()) {
+            discoveredTx = characteristic;
+          } else if (id == charRxUUID.toLowerCase()) {
+            discoveredRx = characteristic;
           }
         }
       }
 
-      if (
-        discoveredTx == null ||
-        discoveredRx == null
-      ) {
-        _showSnackBar(
-          'UUID Mismatch!',
-          color:
-              Colors.redAccent,
-        );
-
+      if (discoveredTx == null || discoveredRx == null) {
+        _showSnackBar('UUID Mismatch!', color: Colors.redAccent);
         try {
           await device.disconnect();
         } catch (e) {
-          debugPrint(
-            'BLE disconnect after UUID mismatch: $e',
-          );
+          debugPrint('BLE disconnect after UUID mismatch: $e');
         }
-
         return;
       }
 
@@ -836,76 +706,71 @@ class _DashboardScreenState extends State<DashboardScreen> {
       rxChar = discoveredRx;
 
       final tx = txChar!;
-
-      if (
-        tx.properties.notify ||
-        tx.properties.indicate
-      ) {
-        await tx.setNotifyValue(
-          true,
-        );
+      if (tx.properties.notify || tx.properties.indicate) {
+        await tx.setNotifyValue(true);
       } else {
-        _showSnackBar(
-          'TX characteristic cannot notify!',
-          color:
-              Colors.redAccent,
-        );
-
+        _showSnackBar('TX characteristic cannot notify!', color: Colors.redAccent);
         await device.disconnect();
-
         return;
       }
 
       await dataSubscription?.cancel();
+      dataSubscription = tx.lastValueStream.listen((value) {
+        if (value.isNotEmpty) {
+          parseIncomingData(utf8.decode(value, allowMalformed: true));
+        }
+      });
 
-      dataSubscription =
-          tx.lastValueStream.listen(
-        (value) {
-          if (value.isNotEmpty) {
-            parseIncomingData(
-              utf8.decode(
-                value,
-                allowMalformed:
-                    true,
-              ),
-            );
-          }
-        },
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      _syncFrameReceived = false;
+      _syncInProgress = true;
+      _isInitialSync = true;
+      await sendCommand('SYNC', showError: false);
+
+      final syncDeadline = DateTime.now().add(
+        const Duration(seconds: 3),
       );
 
-      await Future<void>.delayed(
-        const Duration(
-          milliseconds: 100,
-        ),
-      );
+      while (mounted &&
+          !_syncFrameReceived &&
+          DateTime.now().isBefore(syncDeadline)) {
+        await Future<void>.delayed(
+          const Duration(milliseconds: 50),
+        );
+      }
 
-      await sendCommand('SYNC');
+      if (!_syncFrameReceived) {
+        _syncInProgress = false;
+        await device.disconnect();
+        _showSnackBar(
+          'Device Sync Timeout!',
+          color: Colors.redAccent,
+        );
+        return;
+      }
 
-      await sendCommand(
-        'AIM:$aiModeType',
-      );
+      await sendCommand('AIM:$aiModeType', showError: false);
 
-      if (
-        phoneBatteryTempAvailable &&
-        aiModeType == 1
-      ) {
+      if (phoneBatteryTempAvailable && aiModeType == 1) {
+        _lastBatteryProtectionLevel =
+            _batteryProtectionLevel(phoneBatteryTemp);
         await sendCommand(
           'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
+          showError: false,
         );
+        _lastSentPhoneBatteryTemp = phoneBatteryTemp;
+      }
 
-        _lastSentPhoneBatteryTemp =
-            phoneBatteryTemp;
+      if (mounted) {
+        setState(() {
+          isConnected = true;
+          _syncInProgress = false;
+          _isInitialSync = false;
+        });
       }
     } catch (e) {
-      debugPrint(
-        'Discovery Error: $e',
-      );
-
-      _showSnackBar(
-        'Bluetooth service setup failed',
-        color:
-            Colors.redAccent,
-      );
+      debugPrint('Discovery Error: $e');
+      _showSnackBar('Bluetooth service setup failed', color: Colors.redAccent);
     }
   }
 
@@ -913,575 +778,338 @@ class _DashboardScreenState extends State<DashboardScreen> {
     try {
       await targetDevice?.disconnect();
     } catch (e) {
-      debugPrint(
-        'BLE disconnect error: $e',
-      );
+      debugPrint('BLE disconnect error: $e');
     }
   }
 
-  void parseIncomingData(
-    String incoming,
-  ) {
-    if (!mounted) {
-      return;
-    }
-
+  void parseIncomingData(String incoming) {
     try {
       _incomingBuffer += incoming;
 
-      if (
-        _incomingBuffer.length >
-        8192
-      ) {
-        final marker =
-            _incomingBuffer.lastIndexOf(
-          '<SYNC_START>',
-        );
-
-        _incomingBuffer =
-            marker >= 0
-                ? _incomingBuffer
-                    .substring(
-                    marker,
-                  )
-                : '';
+      if (_incomingBuffer.length > 8192) {
+        final marker = _incomingBuffer.lastIndexOf('<SYNC_START>');
+        _incomingBuffer = marker >= 0
+            ? _incomingBuffer.substring(marker)
+            : '';
       }
 
-      // 1. Tangani frame sync.
-      if (
-        _incomingBuffer
-                .contains(
-              "<SYNC_START>",
-            ) &&
-        _incomingBuffer
-                .contains(
-              "<SYNC_END>",
-            )
-      ) {
-        int start =
-            _incomingBuffer.indexOf(
-          "<SYNC_START>",
-        );
-
-        int end =
-            _incomingBuffer.indexOf(
-          "<SYNC_END>",
-        );
+      if (_incomingBuffer.contains('<SYNC_START>') &&
+          _incomingBuffer.contains('<SYNC_END>')) {
+        final start = _incomingBuffer.indexOf('<SYNC_START>');
+        final end = _incomingBuffer.indexOf('<SYNC_END>');
 
         if (start < end) {
-          String payload =
-              _incomingBuffer.substring(
-            start + 12,
+          final payload = _incomingBuffer.substring(
+            start + '<SYNC_START>'.length,
             end,
           );
 
-          _incomingBuffer =
-              _incomingBuffer.substring(
-            end + 10,
+          _incomingBuffer = _incomingBuffer.substring(
+            end + '<SYNC_END>'.length,
           );
 
-          List<String> lines =
-              payload.split('\n');
-
-          for (String l in lines) {
-            _updateField(
-              l.trim(),
-            );
+          for (final line in payload.split('\n')) {
+            _updateField(line.trim());
           }
 
-          setState(() {});
+          _syncFrameReceived = true;
+          _syncInProgress = false;
+
+          if (mounted && !_isInitialSync && isConnected) {
+            setState(() {});
+          }
 
           return;
         }
       }
 
-      // 2. Tangani update tunggal
-      // setelah sinkronisasi.
-      if (
-        !_incomingBuffer.contains(
-          "<SYNC_START>",
-        )
-      ) {
-        while (
-          _incomingBuffer.contains(
-            '\n',
-          )
-        ) {
-          int nl =
-              _incomingBuffer.indexOf(
-            '\n',
-          );
+      if (!_incomingBuffer.contains('<SYNC_START>')) {
+        bool changed = false;
 
-          String line =
-              _incomingBuffer
-                  .substring(
-                    0,
-                    nl,
-                  )
-                  .trim();
+        while (_incomingBuffer.contains('\n')) {
+          final nl = _incomingBuffer.indexOf('\n');
+          final line = _incomingBuffer
+              .substring(0, nl)
+              .trim();
 
-          _incomingBuffer =
-              _incomingBuffer.substring(
-            nl + 1,
-          );
+          _incomingBuffer = _incomingBuffer.substring(nl + 1);
 
-          if (
-            line.isNotEmpty &&
-            _updateField(line)
-          ) {
-            setState(() {});
+          if (line.isNotEmpty) {
+            changed = _updateField(line) || changed;
           }
+        }
+
+        if (changed && mounted && isConnected) {
+          setState(() {});
         }
       }
     } catch (e) {
-      debugPrint(
-        "Parse stream error: $e",
-      );
+      debugPrint('Parse stream error: $e');
     }
   }
 
-  bool _updateField(
-    String line,
-  ) {
-    if (!line.contains(":")) {
-      return false;
-    }
+  bool _updateField(String line) {
+    if (!line.contains(":")) return false;
+    final separator = line.indexOf(':');
+    if (separator <= 0) return false;
 
-    final separator =
-        line.indexOf(':');
-
-    if (separator <= 0) {
-      return false;
-    }
-
-    final key =
-        line.substring(
-          0,
-          separator,
-        ).trim();
-
-    final value =
-        line.substring(
-          separator + 1,
-        ).trim();
+    final key = line.substring(0, separator).trim();
+    final value = line.substring(separator + 1).trim();
 
     if (key == "TMP") {
-      hotsideTemp =
-          value.replaceAll(
-        RegExp(r'\.0+$'),
-        '',
-      );
-
-      if (
-        isCloudSyncing &&
-        _dbRef != null
-      ) {
-        _dbRef!
-            .child(
-              "telemetry/hotside_temp",
-            )
-            .set(
-              hotsideTemp,
-            );
+      final parsedTemp = double.tryParse(value);
+      hotsideTemp = parsedTemp != null && parsedTemp >= 998.0
+          ? "--"
+          : value.replaceAll(RegExp(r'\.0+$'), '');
+      if (isCloudSyncing && _dbRef != null) {
+        _dbRef!.child("telemetry/hotside_temp").set(hotsideTemp);
       }
     } else if (key == "VOL") {
       voltage = value;
-
-      if (
-        isCloudSyncing &&
-        _dbRef != null
-      ) {
-        _dbRef!
-            .child(
-              "telemetry/voltage",
-            )
-            .set(
-              voltage,
-            );
-      }
+      if (isCloudSyncing && _dbRef != null) _dbRef!.child("telemetry/voltage").set(voltage);
     } else if (key == "RGB") {
-      isRgbOn = value == "1";
+      isRgbOn = (value == "1");
     } else if (key == "AI") {
-      isAiModeOn = value == "1";
+      isAiModeOn = (value == "1");
     } else if (key == "AIM") {
-      final mode =
-          int.tryParse(value);
-
-      if (
-        mode != null &&
-        (mode == 0 || mode == 1)
-      ) {
+      final mode = int.tryParse(value);
+      if (mode != null && (mode == 0 || mode == 1)) {
         aiModeType = mode;
       }
     } else if (key == "BRV") {
-      brightness =
-          double.tryParse(value) ??
-              255;
+      brightness = double.tryParse(value) ?? 255;
     } else if (key == "VER") {
       currentVersion = value;
     } else if (key == "MD") {
-      rgbModeIndex =
-          int.tryParse(value) ?? 0;
+      rgbModeIndex = (int.tryParse(value) ?? 0);
     } else if (key == "LHT") {
-      limitHot =
-          int.tryParse(value) ?? 45;
+      limitHot = int.tryParse(value) ?? 45;
     } else if (key == "LB5") {
-      limitBat5v =
-          int.tryParse(value) ?? 25;
+      limitBat5v = int.tryParse(value) ?? 25;
+      _normalizeBatteryLimits();
     } else if (key == "LB9") {
-      limitBat9v =
-          int.tryParse(value) ?? 30;
+      // Firmware reports the derived 9V midpoint.
     } else if (key == "LB12") {
-      limitBat12v =
-          int.tryParse(value) ?? 35;
+      limitBat12v = int.tryParse(value) ?? 35;
+      _normalizeBatteryLimits();
     } else {
       return false;
     }
-
     return true;
   }
 
-  Future<bool> sendCommand(
-    String cmd,
-  ) {
-    final completer =
-        Completer<bool>();
+  void _normalizeBatteryLimits({int? changed}) {
+    limitBat5v = limitBat5v.clamp(10, 59).toInt();
+    limitBat12v = limitBat12v.clamp(11, 60).toInt();
 
-    _commandWriteQueue =
-        _commandWriteQueue.then(
-      (_) async {
-        if (
-          rxChar == null ||
-          !isConnected
-        ) {
-          if (mounted) {
-            _showSnackBar(
-              'Bluetooth Not Synchronized!',
-              color:
-                  Colors.orangeAccent,
-            );
-          }
+    if (limitBat12v <= limitBat5v) {
+      if (changed == 5) {
+        limitBat12v = (limitBat5v + 1).clamp(11, 60).toInt();
+      } else {
+        limitBat5v = (limitBat12v - 1).clamp(10, 59).toInt();
+      }
+    }
+  }
 
-          completer.complete(false);
-          return;
-        }
-
-        try {
-          final payload =
-              utf8.encode(
-            '$cmd\n',
-          );
-
-          final supportsNoResponse =
-              rxChar!
-                  .properties
-                  .writeWithoutResponse;
-
-          await rxChar!.write(
-            payload,
-            withoutResponse:
-                supportsNoResponse,
-          );
-
-          completer.complete(true);
-        } catch (e) {
-          debugPrint(
-            'BLE write failed ($cmd): $e',
-          );
-
-          completer.complete(false);
-        }
-      },
-    ).catchError(
-      (error) {
-        if (
-          !completer.isCompleted
-        ) {
-          completer.complete(false);
-        }
+  void _queueBatteryLimitSettings() {
+    _limitSendDebounce?.cancel();
+    _limitSendDebounce = Timer(
+      const Duration(milliseconds: 250),
+      () {
+        _sendBatteryLimitSettings();
       },
     );
+  }
 
+  Future<void> _sendBatteryLimitSettings() async {
+    if (!isConnected) {
+      return;
+    }
+
+    _normalizeBatteryLimits();
+
+    await sendCommand(
+      'LB5:$limitBat5v',
+      showError: false,
+    );
+
+    await sendCommand(
+      'LB12:$limitBat12v',
+      showError: false,
+    );
+
+    if (isAiModeOn &&
+        aiModeType == 1 &&
+        phoneBatteryTempAvailable) {
+      _lastBatteryProtectionLevel =
+          _batteryProtectionLevel(phoneBatteryTemp);
+
+      await sendCommand(
+        'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
+        showError: false,
+      );
+
+      _lastSentPhoneBatteryTemp =
+          phoneBatteryTemp;
+    }
+
+    if (isCloudSyncing && _dbRef != null) {
+      await _dbRef!.child('settings/limit_hot').set(limitHot);
+      await _dbRef!.child('settings/limit_bat_5v').set(limitBat5v);
+      await _dbRef!.child('settings/limit_bat_9v').set(limitBat9v);
+      await _dbRef!.child('settings/limit_bat_12v').set(limitBat12v);
+    }
+  }
+
+  Future<bool> sendCommand(String cmd, {bool showError = true}) {
+    final completer = Completer<bool>();
+    _commandWriteQueue = _commandWriteQueue.then((_) async {
+      if (rxChar == null || !isConnected) {
+        if (showError && mounted) {
+          _showSnackBar('Bluetooth Not Synchronized!', color: Colors.orangeAccent);
+        }
+        completer.complete(false);
+        return;
+      }
+
+      try {
+        final payload = utf8.encode('$cmd\n');
+        final supportsNoResponse = rxChar!.properties.writeWithoutResponse;
+        await rxChar!.write(payload, withoutResponse: supportsNoResponse);
+        completer.complete(true);
+      } catch (e) {
+        debugPrint('BLE write failed ($cmd): $e');
+        completer.complete(false);
+      }
+    }).catchError((error) {
+      if (!completer.isCompleted) completer.complete(false);
+    });
     return completer.future;
   }
 
   Future<void> _waitForVersionSync() async {
-    if (currentVersion != 'V?') {
-      return;
-    }
-
-    final deadline =
-        DateTime.now().add(
-      const Duration(seconds: 2),
-    );
-
-    while (
-      mounted &&
-      currentVersion == 'V?' &&
-      DateTime.now()
-          .isBefore(deadline)
-    ) {
-      await Future<void>.delayed(
-        const Duration(
-          milliseconds: 100,
-        ),
-      );
+    if (currentVersion != 'V?') return;
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (mounted && currentVersion == 'V?' && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
     }
   }
 
   Future<void> _openFirmwareUpdateMenu() async {
     if (!isConnected) {
-      _showSnackBar(
-        'Connect to Horizon Cooler first!',
-        color:
-            Colors.orangeAccent,
-      );
-
+      _showSnackBar('Connect to Horizon Cooler first!', color: Colors.orangeAccent);
       return;
     }
-
     await sendCommand('SYNC');
-
     await _waitForVersionSync();
-
-    if (!mounted) {
-      return;
-    }
-
+    if (!mounted) return;
     await showDialog(
       context: context,
       builder: (context) {
         return FirmwareUpdateDialog(
-          currentVersion:
-              currentVersion,
+          currentVersion: currentVersion,
           dbRef: _dbRef,
-          onUpdateTriggered:
-              (
-            ssid,
-            pass,
-            url,
-          ) {
-            _showSnackBar(
-              "Firmware Update Initiated!",
-              color:
-                  Colors.purpleAccent,
-            );
-
-            _triggerCloudOTASequence(
-              ssid,
-              pass,
-              url,
-            );
+          onUpdateTriggered: (ssid, pass, url) {
+            _showSnackBar("Firmware Update Initiated!", color: Colors.purpleAccent);
+            _triggerCloudOTASequence(ssid, pass, url);
           },
         );
       },
     );
   }
 
-  void _triggerCloudOTASequence(
-    String ssid,
-    String pass,
-    String fwUrl,
-  ) async {
-    if (!isConnected) {
-      return;
-    }
-
-    if (
-      !await sendCommand(
-        'OTAENTER',
-      )
-    ) {
-      return;
-    }
-
-    await Future<void>.delayed(
-      const Duration(
-        milliseconds: 250,
-      ),
-    );
-
-    if (
-      !await sendCommand(
-        'SSID:$ssid',
-      )
-    ) {
-      return;
-    }
-
-    await Future<void>.delayed(
-      const Duration(
-        milliseconds: 250,
-      ),
-    );
-
-    if (
-      !await sendCommand(
-        'PASS:$pass',
-      )
-    ) {
-      return;
-    }
-
-    await Future<void>.delayed(
-      const Duration(
-        milliseconds: 250,
-      ),
-    );
-
-    if (
-      !await sendCommand(
-        'URL:$fwUrl',
-      )
-    ) {
-      return;
-    }
-
-    await Future<void>.delayed(
-      const Duration(
-        milliseconds: 250,
-      ),
-    );
-
-    await sendCommand(
-      'CLOUDOTA',
-    );
+  void _triggerCloudOTASequence(String ssid, String pass, String fwUrl) async {
+    if (!isConnected) return;
+    if (!await sendCommand('OTAENTER')) return;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!await sendCommand('SSID:$ssid')) return;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!await sendCommand('PASS:$pass')) return;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!await sendCommand('URL:$fwUrl')) return;
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await sendCommand('CLOUDOTA');
   }
 
   void resetTempSettings() {
     setState(() {
       limitHot = 45;
       limitBat5v = 25;
-      limitBat9v = 30;
       limitBat12v = 35;
+      _normalizeBatteryLimits();
     });
 
-    sendCommand("LHT:45");
-    sendCommand("LB5:25");
-    sendCommand("LB9:30");
-    sendCommand("LB12:35");
+    if (isConnected) {
+      sendCommand(
+        "LHT:45",
+        showError: false,
+      );
+      _queueBatteryLimitSettings();
+    }
 
     _showSnackBar(
       "Settings Reset to Default",
-      color:
-          Colors.green,
+      color: Colors.green,
     );
   }
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor:
-          const Color(0xFF111113),
+      backgroundColor: const Color(0xFF111113),
       appBar: AppBar(
-        title: const Text(
-          "Horizon Cooler",
-          style: TextStyle(
-            fontWeight:
-                FontWeight.bold,
-            fontSize: 18,
-            color: Colors.white,
-          ),
-        ),
+        title: const Text("Horizon Cooler", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white)),
         centerTitle: true,
-        backgroundColor:
-            Colors.transparent,
+        backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: Icon(
-            isConnected
-                ? Icons
-                    .bluetooth_connected
-                : Icons.bluetooth,
-            color: isConnected
-                ? Colors.blueAccent
-                : Colors.white,
-          ),
-          onPressed: isConnected
-              ? disconnectDevice
-              : showBluetoothMenu,
+          icon: Icon(isConnected ? Icons.bluetooth_connected : Icons.bluetooth, color: isConnected ? Colors.blueAccent : Colors.white),
+          onPressed: isConnected ? disconnectDevice : showBluetoothMenu,
         ),
-        actions: [
+        actions: [ 
           IconButton(
-            icon: const Icon(
-              Icons.settings,
-              color: Colors.white,
-            ),
-            onPressed:
-                _openFirmwareUpdateMenu,
-          ),
+            icon: const Icon(Icons.settings, color: Colors.white), 
+            onPressed: _openFirmwareUpdateMenu, 
+          ), 
         ],
       ),
       body: Column(
         children: [
           Padding(
-            padding:
-                const EdgeInsets.only(
-              left: 20,
-              right: 10,
-              top: 10,
-              bottom: 20,
-            ),
+            padding: const EdgeInsets.only(left: 20, right: 10, top: 10, bottom: 20),
             child: Row(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
                   flex: 5,
                   child: Column(
-                    crossAxisAlignment:
-                        CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _buildTopData(
-                        phoneBatteryTempAvailable
-                            ? phoneBatteryTemp
-                                .toStringAsFixed(
-                                1,
-                              )
+                        isConnected && phoneBatteryTempAvailable
+                            ? phoneBatteryTemp.toStringAsFixed(1)
                             : "--",
                         "°C",
                         "Battery Temperature",
-                        color:
-                            Colors.orangeAccent,
+                        color: Colors.orangeAccent,
                       ),
-                      const SizedBox(
-                        height: 20,
-                      ),
+                      const SizedBox(height: 20),
                       _buildTopData(
-                        isConnected
-                            ? hotsideTemp
-                            : "--",
+                        isConnected ? hotsideTemp : "--",
                         "°C",
                         "Hotside Temperature",
-                        color:
-                            Colors.cyanAccent,
+                        color: Colors.cyanAccent,
                       ),
-                      const SizedBox(
-                        height: 20,
-                      ),
+                      const SizedBox(height: 20),
                       _buildTopData(
-                        isConnected
-                            ? voltage.replaceAll(
-                                'V',
-                                '',
-                              )
-                            : "--",
+                        isConnected ? voltage.replaceAll('V', '') : "--",
                         "V",
                         "Voltage Indicator",
-                        color:
-                            Colors.blueAccent,
+                        color: Colors.blueAccent,
                       ),
-                      const SizedBox(
-                        height: 20,
-                      ),
+                      const SizedBox(height: 20),
                       _buildTopData(
-                        isConnected
-                            ? (isAiModeOn
-                                ? "ON"
-                                : "OFF")
-                            : "--",
+                        isConnected ? (isAiModeOn ? "ON" : "OFF") : "--",
                         "",
                         "Adaptive Mode",
                         color: isAiModeOn
@@ -1494,17 +1122,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Expanded(
                   flex: 6,
                   child: Transform.translate(
-                    offset:
-                        const Offset(
-                      -25,
-                      -10,
-                    ),
+                    offset: const Offset(-25, -10), 
                     child: Transform.scale(
-                      scale: 1.35,
+                      scale: 1.35, 
                       child: Image.asset(
-                        'assets/cooler.png',
-                        fit:
-                            BoxFit.contain,
+                        'assets/cooler.png', 
+                        fit: BoxFit.contain,
                         height: 250,
                       ),
                     ),
@@ -1513,78 +1136,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ],
             ),
           ),
+          
           Expanded(
             child: Container(
               width: double.infinity,
-              padding:
-                  const EdgeInsets.only(
-                top: 20,
-                left: 10,
-                right: 10,
-              ),
-              decoration:
-                  const BoxDecoration(
+              padding: const EdgeInsets.only(top: 20, left: 10, right: 10),
+              decoration: const BoxDecoration(
                 color: Colors.white,
-                borderRadius:
-                    BorderRadius.vertical(
-                  top:
-                      Radius.circular(35),
-                ),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(35)),
               ),
               child: Column(
                 children: [
                   Row(
-                    mainAxisAlignment:
-                        MainAxisAlignment
-                            .spaceEvenly,
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
-                      Expanded(
-                        child:
-                            _buildTabMenu(
-                          "Voltage",
-                          0,
-                        ),
-                      ),
-                      Expanded(
-                        child:
-                            _buildTabMenu(
-                          "Adaptive Mode",
-                          1,
-                        ),
-                      ),
-                      Expanded(
-                        child:
-                            _buildTabMenu(
-                          "RGB Led",
-                          2,
-                        ),
-                      ),
-                      Expanded(
-                        child:
-                            _buildTabMenu(
-                          "Temp Set",
-                          3,
-                        ),
-                      ),
+                      Expanded(child: _buildTabMenu("Voltage", 0)),
+                      Expanded(child: _buildTabMenu("Adaptive Mode", 1)),
+                      Expanded(child: _buildTabMenu("RGB Led", 2)),
+                      Expanded(child: _buildTabMenu("Temp Set", 3)),
                     ],
                   ),
-                  const SizedBox(
-                    height: 10,
-                  ),
-                  const Divider(
-                    color:
-                        Colors.black12,
-                    thickness: 1.5,
-                  ),
+                  const SizedBox(height: 10),
+                  const Divider(color: Colors.black12, thickness: 1.5),
+                  
                   Expanded(
                     child: Container(
-                      padding:
-                          const EdgeInsets
-                              .symmetric(
-                        horizontal: 10,
-                      ),
-                      child:
-                          _buildMenuContent(),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: _buildMenuContent(), 
                     ),
                   ),
                 ],
@@ -1596,118 +1174,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildTopData(
-    String value,
-    String unit,
-    String label, {
-    Color color = Colors.white,
-  }) {
+  Widget _buildTopData(String value, String unit, String label, {Color color = Colors.white}) {
     return Column(
-      crossAxisAlignment:
-          CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
-          mainAxisSize:
-              MainAxisSize.min,
-          crossAxisAlignment:
-              CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              value,
-              style: TextStyle(
-                color: color,
-                fontSize: 26,
-                fontWeight:
-                    FontWeight.w900,
-              ),
-            ),
-            if (
-              unit.isNotEmpty &&
-              value != "--"
-            )
+            Text(value, style: TextStyle(color: color, fontSize: 26, fontWeight: FontWeight.w900)),
+            if (unit.isNotEmpty && value != "--") 
               Padding(
-                padding:
-                    const EdgeInsets.only(
-                  top: 4.0,
-                  left: 2,
-                ),
-                child: Text(
-                  unit,
-                  style:
-                      const TextStyle(
-                    color: Colors.grey,
-                    fontSize: 12,
-                    fontWeight:
-                        FontWeight.bold,
-                  ),
-                ),
+                padding: const EdgeInsets.only(top: 4.0, left: 2),
+                child: Text(unit, style: const TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.bold)),
               ),
           ],
         ),
-        const SizedBox(
-          height: 2,
-        ),
-        Text(
-          label,
-          style:
-              const TextStyle(
-            color: Colors.grey,
-            fontSize: 11,
-            fontWeight:
-                FontWeight.w600,
-          ),
-        ),
+        const SizedBox(height: 2),
+        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.w600)),
       ],
     );
   }
 
-  Widget _buildTabMenu(
-    String title,
-    int index,
-  ) {
-    bool isSelected =
-        selectedMenuIndex ==
-            index;
-
+  Widget _buildTabMenu(String title, int index) {
+    bool isSelected = selectedMenuIndex == index;
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          selectedMenuIndex =
-              index;
-        });
-      },
+      onTap: () => setState(() => selectedMenuIndex = index),
       child: Container(
-        margin:
-            const EdgeInsets.symmetric(
-          horizontal: 2,
-        ),
-        padding:
-            const EdgeInsets.symmetric(
-          vertical: 10,
-        ),
-        decoration:
-            BoxDecoration(
-          color: isSelected
-              ? Colors.black
-              : Colors.transparent,
-          borderRadius:
-              BorderRadius.circular(
-            20,
-          ),
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.black : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
         ),
         child: Center(
           child: Text(
-            title,
-            textAlign:
-                TextAlign.center,
-            style: TextStyle(
-              color: isSelected
-                  ? Colors.white
-                  : Colors.black54,
-              fontWeight:
-                  FontWeight.bold,
-              fontSize: 12,
-            ),
+            title, 
+            textAlign: TextAlign.center,
+            style: TextStyle(color: isSelected ? Colors.white : Colors.black54, fontWeight: FontWeight.bold, fontSize: 12),
           ),
         ),
       ),
@@ -1715,57 +1219,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildMenuContent() {
-    switch (
-        selectedMenuIndex) {
-      case 0:
-        return _buildVoltageMenu();
-
-      case 1:
-        return _buildAiMenu();
-
-      case 2:
-        return _buildRgbMenu();
-
-      case 3:
-        return _buildTempSettingMenu();
-
-      default:
-        return Container();
+    switch (selectedMenuIndex) {
+      case 0: return _buildVoltageMenu();
+      case 1: return _buildAiMenu();
+      case 2: return _buildRgbMenu();
+      case 3: return _buildTempSettingMenu();
+      default: return Container();
     }
   }
 
   Widget _buildVoltageMenu() {
     return Column(
-      mainAxisAlignment:
-          MainAxisAlignment.center,
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
         if (isAiModeOn) ...[
-          const Icon(
-            Icons.lock_outline,
-            color:
-                Colors.redAccent,
-            size: 50,
-          ),
-          const SizedBox(
-            height: 10,
-          ),
+          const Icon(Icons.lock_outline, color: Colors.redAccent, size: 50),
+          const SizedBox(height: 10),
           const Text(
             "Voltage Locked by Adaptive Mode",
-            style: TextStyle(
-              color:
-                  Colors.redAccent,
-              fontWeight:
-                  FontWeight.bold,
-            ),
+            style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
           ),
-          const SizedBox(
-            height: 20,
-          ),
+          const SizedBox(height: 20),
         ],
         Row(
-          mainAxisAlignment:
-              MainAxisAlignment
-                  .spaceEvenly,
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
             _voltButton("5V"),
             _voltButton("9V"),
@@ -1776,70 +1253,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _voltButton(
-    String v,
-  ) {
-    bool isActive =
-        voltage == v;
-
+  Widget _voltButton(String v) {
+    bool isActive = voltage == v;
     return Opacity(
-      opacity:
-          isAiModeOn ? 0.4 : 1.0,
+      opacity: !isConnected || isAiModeOn ? 0.4 : 1.0,
       child: InkWell(
-        onTap: isAiModeOn
-            ? null
-            : () {
-                setState(() {
-                  voltage = v;
-                });
-
-                sendCommand(v);
-              },
+        onTap: !isConnected || isAiModeOn ? null : () {
+          setState(() => voltage = v);
+          sendCommand(v);
+        },
         child: AnimatedContainer(
-          duration:
-              const Duration(
-            milliseconds: 200,
-          ),
+          duration: const Duration(milliseconds: 200),
           width: 80,
           height: 80,
-          decoration:
-              BoxDecoration(
-            color: isActive
-                ? Colors.black
-                : Colors.white,
-            borderRadius:
-                BorderRadius.circular(
-              20,
-            ),
-            border:
-                Border.all(
-              color: isActive
-                  ? Colors.black
-                  : Colors.grey.shade300,
-              width: 2,
-            ),
-            boxShadow: isActive
-                ? [
-                    const BoxShadow(
-                      color:
-                          Colors.black26,
-                      blurRadius: 10,
-                      offset:
-                          Offset(0, 5),
-                    ),
-                  ]
-                : [],
+          decoration: BoxDecoration(
+            color: isActive ? Colors.black : Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: isActive ? Colors.black : Colors.grey.shade300, width: 2),
+            boxShadow: isActive ? [const BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))] : [],
           ),
           child: Center(
             child: Text(
               v,
               style: TextStyle(
-                color: isActive
-                    ? Colors.white
-                    : Colors.black87,
+                color: isActive ? Colors.white : Colors.black87,
                 fontSize: 22,
-                fontWeight:
-                    FontWeight.w900,
+                fontWeight: FontWeight.w900,
               ),
             ),
           ),
@@ -1852,164 +1291,70 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Column(
       children: [
         ListTile(
-          title: const Text(
-            "Master Adaptive Switch",
-            style: TextStyle(
-              fontWeight:
-                  FontWeight.bold,
-              fontSize: 16,
-            ),
-          ),
-          subtitle: const Text(
-            "Turn adaptive control ON or OFF",
-          ),
+          title: const Text("Master Adaptive Switch", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          subtitle: const Text("Turn adaptive control ON or OFF"),
           trailing: Switch(
-            value: isAiModeOn,
-            activeColor:
-                Colors.blueAccent,
-            onChanged:
-                (val) async {
-              setState(() {
-                isAiModeOn =
-                    val;
-              });
-
-              await sendCommand(
-                val
-                    ? 'AION'
-                    : 'AIOFF',
-              );
-
-              await sendCommand(
-                'AIM:$aiModeType',
-              );
-
-              if (
-                val &&
-                aiModeType == 1 &&
-                phoneBatteryTempAvailable
-              ) {
+            value: isConnected && isAiModeOn,
+            activeColor: Colors.blueAccent,
+            onChanged: isConnected ? (val) async {
+              setState(() => isAiModeOn = val);
+              if (!val) {
+                _lastBatteryProtectionLevel = -1;
+              }
+              await sendCommand(val ? 'AION' : 'AIOFF', showError: false);
+              await sendCommand('AIM:$aiModeType', showError: false);
+              if (val && aiModeType == 1 && phoneBatteryTempAvailable) {
+                _lastBatteryProtectionLevel = _batteryProtectionLevel(phoneBatteryTemp);
                 await sendCommand(
                   'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
+                  showError: false,
                 );
-
-                _lastSentPhoneBatteryTemp =
-                    phoneBatteryTemp;
+                _lastSentPhoneBatteryTemp = phoneBatteryTemp;
               }
-            },
+            } : null,
           ),
         ),
         const Divider(),
-        _aiOptionTile(
-          0,
-          "Temperature Protection",
-          "Protect the cooler from overheating.",
-        ),
-        _aiOptionTile(
-          1,
-          "Temperature + Battery Protection",
-          "Adjust voltage automatically from phone battery temperature.",
-        ),
+        _aiOptionTile(0, "Temperature Protection", "Protect the cooler from overheating."),
+        _aiOptionTile(1, "Temperature + Battery Protection", "Adjust voltage automatically from phone battery temperature."),
       ],
     );
   }
 
-  Widget _aiOptionTile(
-    int index,
-    String title,
-    String sub,
-  ) {
-    bool isSelected =
-        aiModeType == index;
-
+  Widget _aiOptionTile(int index, String title, String sub) {
+    bool isSelected = aiModeType == index;
     return InkWell(
-      onTap: () async {
-        setState(() {
-          aiModeType =
-              index;
-        });
-
-        await sendCommand(
-          'AIM:$index',
-        );
-
-        if (
-          index == 1 &&
-          phoneBatteryTempAvailable
-        ) {
+      onTap: isConnected ? () async {
+        setState(() => aiModeType = index);
+        await sendCommand('AIM:$index', showError: false);
+        _lastBatteryProtectionLevel = -1;
+        if (index == 1 && phoneBatteryTempAvailable) {
+          _lastBatteryProtectionLevel = _batteryProtectionLevel(phoneBatteryTemp);
           await sendCommand(
             'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
+            showError: false,
           );
-
-          _lastSentPhoneBatteryTemp =
-              phoneBatteryTemp;
+          _lastSentPhoneBatteryTemp = phoneBatteryTemp;
         }
-      },
+      } : null,
       child: Container(
-        margin:
-            const EdgeInsets.symmetric(
-          vertical: 8,
-        ),
-        padding:
-            const EdgeInsets.all(
-          15,
-        ),
-        decoration:
-            BoxDecoration(
-          color: isSelected
-              ? Colors.blue
-                  .withOpacity(
-                  0.1,
-                )
-              : Colors.white,
-          border:
-              Border.all(
-            color: isSelected
-                ? Colors.blueAccent
-                : Colors.grey.shade300,
-            width: 2,
-          ),
-          borderRadius:
-              BorderRadius.circular(
-            15,
-          ),
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.blue.withOpacity(0.1) : Colors.white,
+          border: Border.all(color: isSelected ? Colors.blueAccent : Colors.grey.shade300, width: 2),
+          borderRadius: BorderRadius.circular(15),
         ),
         child: Row(
           children: [
-            Icon(
-              isSelected
-                  ? Icons
-                      .check_circle
-                  : Icons.circle_outlined,
-              color: isSelected
-                  ? Colors.blueAccent
-                  : Colors.grey,
-            ),
-            const SizedBox(
-              width: 15,
-            ),
+            Icon(isSelected ? Icons.check_circle : Icons.circle_outlined, color: isSelected ? Colors.blueAccent : Colors.grey),
+            const SizedBox(width: 15),
             Expanded(
               child: Column(
-                crossAxisAlignment:
-                    CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style:
-                        const TextStyle(
-                      fontWeight:
-                          FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                  Text(
-                    sub,
-                    style: TextStyle(
-                      color:
-                          Colors.grey.shade600,
-                      fontSize: 11,
-                    ),
-                  ),
+                  Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  Text(sub, style: TextStyle(color: Colors.grey.shade600, fontSize: 11)),
                 ],
               ),
             ),
@@ -2021,396 +1366,319 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildRgbMenu() {
     return Column(
-      mainAxisAlignment:
-          MainAxisAlignment.center,
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
         InkWell(
-          onTap: () {
-            setState(() {
-              isRgbOn =
-                  !isRgbOn;
-            });
-
-            sendCommand(
-              "RGBTOGGLE",
-            );
+          onTap: !isConnected ? null : () {
+            setState(() => isRgbOn = !isRgbOn);
+            sendCommand("RGBTOGGLE", showError: false);
           },
           child: AnimatedContainer(
-            duration:
-                const Duration(
-              milliseconds: 200,
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: isRgbOn ? Colors.black : Colors.white,
+              shape: BoxShape.circle,
+              border: Border.all(color: isRgbOn ? Colors.black : Colors.grey.shade300, width: 2),
+              boxShadow: isRgbOn ? [const BoxShadow(color: Colors.black26, blurRadius: 15)] : [],
             ),
-            padding:
-                const EdgeInsets.all(
-              20,
-            ),
-            decoration:
-                BoxDecoration(
-              color: isRgbOn
-                  ? Colors.black
-                  : Colors.white,
-              shape:
-                  BoxShape.circle,
-              border:
-                  Border.all(
-                color: isRgbOn
-                    ? Colors.black
-                    : Colors.grey.shade300,
-                width: 2,
-              ),
-              boxShadow: isRgbOn
-                  ? [
-                      const BoxShadow(
-                        color:
-                            Colors.black26,
-                        blurRadius: 15,
-                      ),
-                    ]
-                  : [],
-            ),
-            child: Icon(
-              Icons.power_settings_new,
-              color: isRgbOn
-                  ? Colors.white
-                  : Colors.grey,
-              size: 40,
-            ),
+            child: Icon(Icons.power_settings_new, color: isRgbOn ? Colors.white : Colors.grey, size: 40),
           ),
         ),
-        const SizedBox(
-          height: 25,
-        ),
+        const SizedBox(height: 25),
         Row(
-          mainAxisAlignment:
-              MainAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             IconButton(
-              icon: const Icon(
-                Icons.arrow_back_ios,
-                color:
-                    Colors.black87,
-              ),
-              onPressed: () {
-                sendCommand(
-                  "RGBPREV",
-                );
-              },
+              icon: const Icon(Icons.arrow_back_ios, color: Colors.black87),
+              onPressed: isConnected ? () {
+                sendCommand("RGBPREV", showError: false);
+              } : null,
             ),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(
-                horizontal: 30,
-                vertical: 10,
-              ),
-              decoration:
-                  BoxDecoration(
-                color:
-                    Colors.grey.shade100,
-                borderRadius:
-                    BorderRadius.circular(
-                  15,
-                ),
-              ),
-              child: Text(
-                "Mode $rgbModeIndex",
-                style:
-                    const TextStyle(
-                  fontWeight:
-                      FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 10),
+              decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(15)),
+              child: Text("Mode $rgbModeIndex", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             ),
             IconButton(
-              icon: const Icon(
-                Icons.arrow_forward_ios,
-                color:
-                    Colors.black87,
-              ),
-              onPressed: () {
-                sendCommand(
-                  "RGBNEXT",
-                );
-              },
+              icon: const Icon(Icons.arrow_forward_ios, color: Colors.black87),
+              onPressed: isConnected ? () {
+                sendCommand("RGBNEXT", showError: false);
+              } : null,
             ),
           ],
         ),
-        const SizedBox(
-          height: 25,
-        ),
+        const SizedBox(height: 25),
         Row(
           children: [
-            const Icon(
-              Icons.brightness_low,
-              color: Colors.grey,
-            ),
+            const Icon(Icons.brightness_low, color: Colors.grey),
             Expanded(
               child: Slider(
-                value: brightness,
-                min: 1,
-                max: 255,
-                activeColor:
-                    Colors.black,
-                inactiveColor:
-                    Colors.grey.shade300,
-                onChangeEnd:
-                    (val) => sendCommand(
-                  "BR:${val.toInt()}",
-                ),
-                onChanged: (val) {
-                  setState(() {
-                    brightness = val;
-                  });
-                },
+                value: brightness, 
+                min: 1, 
+                max: 255, 
+                activeColor: Colors.black, 
+                inactiveColor: Colors.grey.shade300,
+                onChangeEnd: isConnected
+                    ? (val) => sendCommand("BR:${val.toInt()}", showError: false)
+                    : null,
+                onChanged: isConnected
+                    ? (val) => setState(() => brightness = val)
+                    : null,
               ),
             ),
             Text(
-              "${(brightness / 255 * 100).toInt()}%",
-              style:
-                  const TextStyle(
-                fontWeight:
-                    FontWeight.bold,
-              ),
+              isConnected
+                  ? "${(brightness / 255 * 100).toInt()}%"
+                  : "--",
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ],
-        ),
+        )
       ],
     );
   }
 
   Widget _buildTempSettingMenu() {
-    if (isAiModeOn) {
-      return const Column(
-        mainAxisAlignment:
-            MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.lock_outline,
-            color:
-                Colors.redAccent,
-            size: 50,
-          ),
-          SizedBox(
-            height: 10,
-          ),
-          Text(
-            "Settings Locked by Adaptive Mode",
-            style: TextStyle(
-              color:
-                  Colors.redAccent,
-              fontWeight:
-                  FontWeight.bold,
-            ),
-          ),
-        ],
-      );
-    }
+    final batteryRangeText =
+        '${limitBat5v}°C to ${limitBat12v}°C';
 
     return ListView(
-      physics:
-          const BouncingScrollPhysics(),
+      physics: const BouncingScrollPhysics(),
       children: [
+        const SizedBox(height: 6),
+        const Text(
+          'Hotside Protection',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            color: Colors.black54,
+          ),
+        ),
         _tempAdjusterTile(
-          "Coldside / Overheat Limit",
+          'Hotside Overheat Limit',
           limitHot,
           (v) {
+            if (!isConnected) {
+              return;
+            }
+
+            final next = v.clamp(35, 80).toInt();
+            if (next == limitHot) {
+              return;
+            }
+
             setState(() {
-              limitHot = v;
+              limitHot = next;
             });
 
             sendCommand(
-              "LHT:$v",
+              'LHT:$next',
+              showError: false,
             );
           },
-          "°C",
+          '°C',
+          minValue: 35,
+          maxValue: 80,
         ),
+        const SizedBox(height: 10),
         const Divider(),
-        const Padding(
-          padding:
-              EdgeInsets.symmetric(
-            vertical: 8.0,
+        const SizedBox(height: 8),
+        const Text(
+          'Battery Temperature → Voltage',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+            color: Colors.black54,
           ),
-          child: Text(
-            "Battery Temperature Limits",
-            style: TextStyle(
-              fontWeight:
-                  FontWeight.w900,
-              color:
-                  Colors.black54,
+        ),
+        const SizedBox(height: 6),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: Colors.grey.shade300,
             ),
           ),
+          child: Column(
+            children: [
+              _batteryLimitRow(
+                title: '5V',
+                subtitle: 'Below',
+                value: limitBat5v,
+                enabled: isConnected,
+                onMinus: () {
+                  if (!isConnected) return;
+                  final next = (limitBat5v - 1).clamp(10, 59).toInt();
+                  setState(() {
+                    limitBat5v = next;
+                    _normalizeBatteryLimits(changed: 5);
+                  });
+                  _queueBatteryLimitSettings();
+                },
+                onPlus: () {
+                  if (!isConnected) return;
+                  final next = (limitBat5v + 1).clamp(10, 59).toInt();
+                  if (next >= limitBat12v) return;
+                  setState(() {
+                    limitBat5v = next;
+                    _normalizeBatteryLimits(changed: 5);
+                  });
+                  _queueBatteryLimitSettings();
+                },
+              ),
+              const Divider(height: 18),
+              _batteryLimitRow(
+                title: '9V',
+                subtitle: 'Between 5V and 12V • LOCKED',
+                value: limitBat9v,
+                enabled: false,
+              ),
+              const Divider(height: 18),
+              _batteryLimitRow(
+                title: '12V',
+                subtitle: 'At / Above',
+                value: limitBat12v,
+                enabled: isConnected,
+                onMinus: () {
+                  if (!isConnected) return;
+                  final next = (limitBat12v - 1).clamp(11, 60).toInt();
+                  if (next <= limitBat5v) return;
+                  setState(() {
+                    limitBat12v = next;
+                    _normalizeBatteryLimits(changed: 12);
+                  });
+                  _queueBatteryLimitSettings();
+                },
+                onPlus: () {
+                  if (!isConnected) return;
+                  final next = (limitBat12v + 1).clamp(11, 60).toInt();
+                  setState(() {
+                    limitBat12v = next;
+                    _normalizeBatteryLimits(changed: 12);
+                  });
+                  _queueBatteryLimitSettings();
+                },
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Battery limits locked to 10°C–60°C • Current range: $batteryRangeText',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
-        _tempAdjusterTile(
-          "5V Limit (Drop if <)",
-          limitBat5v,
-          (v) {
-            setState(() {
-              limitBat5v = v;
-            });
-
-            sendCommand(
-              "LB5:$v",
-            );
-          },
-          "°C",
-        ),
-        _tempAdjusterTile(
-          "9V Limit (Normal)",
-          limitBat9v,
-          (v) {
-            setState(() {
-              limitBat9v = v;
-            });
-
-            sendCommand(
-              "LB9:$v",
-            );
-          },
-          "°C",
-        ),
-        _tempAdjusterTile(
-          "12V Limit (Boost if >)",
-          limitBat12v,
-          (v) {
-            setState(() {
-              limitBat12v = v;
-            });
-
-            sendCommand(
-              "LB12:$v",
-            );
-          },
-          "°C",
-        ),
-        const SizedBox(
-          height: 20,
-        ),
+        const SizedBox(height: 20),
         ElevatedButton.icon(
-          style:
-              ElevatedButton.styleFrom(
-            backgroundColor:
-                Colors.redAccent
-                    .withOpacity(
-              0.1,
-            ),
-            foregroundColor:
-                Colors.red,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.redAccent.withOpacity(0.1),
+            foregroundColor: Colors.red,
             elevation: 0,
-            padding:
-                const EdgeInsets
-                    .symmetric(
-              vertical: 12,
-            ),
+            padding: const EdgeInsets.symmetric(vertical: 12),
           ),
-          onPressed:
-              resetTempSettings,
-          icon: const Icon(
-            Icons.restore,
-          ),
+          onPressed: isConnected
+              ? resetTempSettings
+              : null,
+          icon: const Icon(Icons.restore),
           label: const Text(
-            "Reset to Default Settings",
+            'Reset to Default Settings',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  Widget _batteryLimitRow({
+    required String title,
+    required String subtitle,
+    required int value,
+    required bool enabled,
+    VoidCallback? onMinus,
+    VoidCallback? onPlus,
+  }) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 44,
+          child: Text(
+            title,
             style: TextStyle(
-              fontWeight:
-                  FontWeight.bold,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              color: enabled
+                  ? Colors.blueAccent
+                  : Colors.grey,
             ),
           ),
         ),
-        const SizedBox(
-          height: 20,
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$value°C',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 10,
+                ),
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          onPressed: enabled ? onMinus : null,
+          icon: const Icon(
+            Icons.remove_circle_outline,
+          ),
+        ),
+        IconButton(
+          onPressed: enabled ? onPlus : null,
+          icon: const Icon(
+            Icons.add_circle_outline,
+          ),
         ),
       ],
     );
   }
 
-  Widget _tempAdjusterTile(
-    String label,
-    int value,
-    Function(int) onChanged,
-    String unit,
-  ) {
+  Widget _tempAdjusterTile(String label, int value, Function(int) onChanged, String unit) {
     return Padding(
-      padding:
-          const EdgeInsets.symmetric(
-        vertical: 5,
-      ),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
-        mainAxisAlignment:
-            MainAxisAlignment
-                .spaceBetween,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Expanded(
-            child: Text(
-              label,
-              style:
-                  const TextStyle(
-                fontWeight:
-                    FontWeight.bold,
-                fontSize: 13,
-              ),
-            ),
-          ),
+          Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13))),
           Row(
             children: [
-              IconButton(
-                icon: const Icon(
-                  Icons
-                      .remove_circle_outline,
-                  color:
-                      Colors.black54,
-                ),
-                onPressed: () {
-                  onChanged(
-                    value - 1,
-                  );
-                },
-              ),
-              SizedBox(
-                width: 45,
-                child: Center(
-                  child: Text(
-                    "$value$unit",
-                    style:
-                        const TextStyle(
-                      fontWeight:
-                          FontWeight.w900,
-                      fontSize: 15,
-                      color:
-                          Colors.blueAccent,
-                    ),
-                  ),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(
-                  Icons
-                      .add_circle_outline,
-                  color:
-                      Colors.black54,
-                ),
-                onPressed: () {
-                  onChanged(
-                    value + 1,
-                  );
-                },
-              ),
+              IconButton(icon: const Icon(Icons.remove_circle_outline, color: Colors.black54), onPressed: () => onChanged(value - 1)),
+              SizedBox(width: 45, child: Center(child: Text("$value$unit", style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Colors.blueAccent)))),
+              IconButton(icon: const Icon(Icons.add_circle_outline, color: Colors.black54), onPressed: () => onChanged(value + 1)),
             ],
-          ),
+          )
         ],
       ),
     );
   }
 }
 
-class FirmwareUpdateDialog
-    extends StatefulWidget {
+class FirmwareUpdateDialog extends StatefulWidget {
   final String currentVersion;
   final DatabaseReference? dbRef;
-
-  final Function(
-    String,
-    String,
-    String,
-  ) onUpdateTriggered;
+  final Function(String, String, String) onUpdateTriggered;
 
   const FirmwareUpdateDialog({
     super.key,
@@ -2420,48 +1688,29 @@ class FirmwareUpdateDialog
   });
 
   @override
-  State<FirmwareUpdateDialog> createState() =>
-      _FirmwareUpdateDialogState();
+  State<FirmwareUpdateDialog> createState() => _FirmwareUpdateDialogState();
 }
 
-class _FirmwareUpdateDialogState
-    extends State<FirmwareUpdateDialog> {
+class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
   bool isChecking = true;
-
   String latestVersion = "";
   String fwUrl = "";
-
   bool hasUpdate = false;
 
-  final TextEditingController
-      ssidCtrl =
-      TextEditingController();
-
-  final TextEditingController
-      passCtrl =
-      TextEditingController();
+  final TextEditingController ssidCtrl = TextEditingController();
+  final TextEditingController passCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-
     _loadSavedCredentials();
     _checkFirebaseForUpdate();
   }
 
   @override
-  void didUpdateWidget(
-    covariant FirmwareUpdateDialog
-        oldWidget,
-  ) {
-    super.didUpdateWidget(
-      oldWidget,
-    );
-
-    if (
-      oldWidget.currentVersion !=
-      widget.currentVersion
-    ) {
+  void didUpdateWidget(covariant FirmwareUpdateDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentVersion != widget.currentVersion) {
       _checkFirebaseForUpdate();
     }
   }
@@ -2470,378 +1719,145 @@ class _FirmwareUpdateDialogState
   void dispose() {
     ssidCtrl.dispose();
     passCtrl.dispose();
-
     super.dispose();
   }
 
-  Future<void>
-      _loadSavedCredentials() async {
-    SharedPreferences prefs =
-        await SharedPreferences
-            .getInstance();
-
+  Future<void> _loadSavedCredentials() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
     if (mounted) {
       setState(() {
-        ssidCtrl.text =
-            prefs.getString(
-                  "saved_ssid",
-                ) ??
-                "";
-
-        passCtrl.text =
-            prefs.getString(
-                  "saved_pass",
-                ) ??
-                "";
+        ssidCtrl.text = prefs.getString("saved_ssid") ?? "";
+        passCtrl.text = prefs.getString("saved_pass") ?? "";
       });
     }
   }
 
-  int _versionValue(
-    String version,
-  ) {
-    final match = RegExp(
-      r'^V(\d+)(?:\.(\d+))?$',
-    ).firstMatch(
-      version
-          .trim()
-          .toUpperCase(),
-    );
-
-    if (match == null) {
-      return -1;
-    }
-
-    final major =
-        int.tryParse(
-              match.group(1)!,
-            ) ??
-            0;
-
-    final minor =
-        int.tryParse(
-              match.group(2) ??
-                  '0',
-            ) ??
-            0;
-
+  int _versionValue(String version) {
+    final match = RegExp(r'^V(\d+)(?:\.(\d+))?$').firstMatch(version.trim().toUpperCase());
+    if (match == null) return -1;
+    final major = int.tryParse(match.group(1)!) ?? 0;
+    final minor = int.tryParse(match.group(2) ?? '0') ?? 0;
     return major * 100 + minor;
   }
 
-  Future<void>
-      _checkFirebaseForUpdate() async {
+  Future<void> _checkFirebaseForUpdate() async {
     if (widget.dbRef == null) {
       if (mounted) {
         setState(() {
           isChecking = false;
-
-          latestVersion =
-              widget.currentVersion;
-
+          latestVersion = widget.currentVersion;
           hasUpdate = false;
         });
       }
-
       return;
     }
 
     try {
-      final snapshot =
-          await widget.dbRef!
-              .child(
-                "firmware_update",
-              )
-              .get();
-
-      if (
-        snapshot.exists &&
-        snapshot.value != null
-      ) {
-        final raw =
-            snapshot.value;
-
+      final snapshot = await widget.dbRef!.child("firmware_update").get();
+      if (snapshot.exists && snapshot.value != null) {
+        final raw = snapshot.value;
         if (raw is Map) {
-          final data =
-              Map<String, dynamic>.from(
-            raw,
-          );
-
-          latestVersion =
-              data['version']
-                      ?.toString() ??
-                  widget.currentVersion;
-
-          fwUrl =
-              data['url']
-                      ?.toString() ??
-                  '';
+          final data = Map<String, dynamic>.from(raw);
+          latestVersion = data['version']?.toString() ?? widget.currentVersion;
+          fwUrl = data['url']?.toString() ?? '';
         } else {
-          latestVersion =
-              widget.currentVersion;
+          latestVersion = widget.currentVersion;
         }
       } else {
-        latestVersion =
-            widget.currentVersion;
+        latestVersion = widget.currentVersion;
       }
     } catch (e) {
-      latestVersion =
-          widget.currentVersion;
+      latestVersion = widget.currentVersion;
     }
 
     if (mounted) {
       setState(() {
         isChecking = false;
-
-        hasUpdate =
-            widget.currentVersion !=
-                'V?' &&
-            _versionValue(
-                  latestVersion,
-                ) >
-                _versionValue(
-                  widget.currentVersion,
-                ) &&
-            latestVersion
-                .isNotEmpty &&
-            fwUrl.isNotEmpty;
+        hasUpdate = (widget.currentVersion != 'V?' &&
+            _versionValue(latestVersion) > _versionValue(widget.currentVersion) &&
+            latestVersion.isNotEmpty &&
+            fwUrl.isNotEmpty);
       });
     }
   }
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor:
-          const Color(0xFF1E202B),
-      shape:
-          RoundedRectangleBorder(
-        borderRadius:
-            BorderRadius.circular(
-          20,
-        ),
-      ),
-      title: const Text(
-        "Firmware Settings",
-        style: TextStyle(
-          color: Colors.white,
-          fontWeight:
-              FontWeight.bold,
-        ),
-      ),
+      backgroundColor: const Color(0xFF1E202B),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: const Text("Firmware Settings", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       content: isChecking
           ? const SizedBox(
               height: 100,
-              child:
-                  Center(
-                child:
-                    CircularProgressIndicator(
-                  color:
-                      Colors.blueAccent,
-                ),
-              ),
+              child: Center(child: CircularProgressIndicator(color: Colors.blueAccent)),
             )
           : Column(
-              mainAxisSize:
-                  MainAxisSize.min,
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  "Current Firmware: ${widget.currentVersion}",
-                  style:
-                      const TextStyle(
-                    color:
-                        Colors.white70,
-                  ),
-                ),
-                const SizedBox(
-                  height: 8,
-                ),
-                Text(
-                  "Latest Firmware: $latestVersion",
-                  style:
-                      const TextStyle(
-                    color:
-                        Colors.white70,
-                  ),
-                ),
-                const SizedBox(
-                  height: 20,
-                ),
+                Text("Current Firmware: ${widget.currentVersion}", style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 8),
+                Text("Latest Firmware: $latestVersion", style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 20),
                 if (!hasUpdate)
                   Center(
                     child: Text(
-                      widget.currentVersion ==
-                              "V?"
-                          ? "Synchronizing Device Version..."
-                          : "System is Up to Date",
+                      widget.currentVersion == "V?" 
+                          ? "Synchronizing Device Version..." 
+                          : "System is Up to Date", 
                       style: TextStyle(
-                        color: widget
-                                    .currentVersion ==
-                                "V?"
-                            ? Colors.orangeAccent
-                            : Colors
-                                .greenAccent,
-                        fontWeight:
-                            FontWeight.bold,
+                        color: widget.currentVersion == "V?" ? Colors.orangeAccent : Colors.greenAccent, 
+                        fontWeight: FontWeight.bold, 
                         fontSize: 15,
                       ),
                     ),
                   )
-                else
-                  ...[
-                    const Text(
-                      "New Firmware Available!",
-                      style:
-                          TextStyle(
-                        color:
-                            Colors.orangeAccent,
-                        fontWeight:
-                            FontWeight.bold,
-                      ),
+                else ...[
+                  const Text("New Firmware Available!", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 15),
+                  TextField(
+                    controller: ssidCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(
+                      labelText: "WiFi SSID",
+                      labelStyle: TextStyle(color: Colors.grey),
+                      prefixIcon: Icon(Icons.wifi, color: Colors.blueAccent),
+                      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
                     ),
-                    const SizedBox(
-                      height: 15,
+                  ),
+                  TextField(
+                    controller: passCtrl,
+                    style: const TextStyle(color: Colors.white),
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: "Password",
+                      labelStyle: TextStyle(color: Colors.grey),
+                      prefixIcon: Icon(Icons.lock, color: Colors.blueAccent),
+                      enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
                     ),
-                    TextField(
-                      controller:
-                          ssidCtrl,
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white,
-                      ),
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            "WiFi SSID",
-                        labelStyle:
-                            TextStyle(
-                          color:
-                              Colors.grey,
-                        ),
-                        prefixIcon:
-                            Icon(
-                          Icons.wifi,
-                          color:
-                              Colors.blueAccent,
-                        ),
-                        enabledBorder:
-                            UnderlineInputBorder(
-                          borderSide:
-                              BorderSide(
-                            color:
-                                Colors.grey,
-                          ),
-                        ),
-                      ),
-                    ),
-                    TextField(
-                      controller:
-                          passCtrl,
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white,
-                      ),
-                      obscureText:
-                          true,
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            "Password",
-                        labelStyle:
-                            TextStyle(
-                          color:
-                              Colors.grey,
-                        ),
-                        prefixIcon:
-                            Icon(
-                          Icons.lock,
-                          color:
-                              Colors.blueAccent,
-                        ),
-                        enabledBorder:
-                            UnderlineInputBorder(
-                          borderSide:
-                              BorderSide(
-                            color:
-                                Colors.grey,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
+                ],
               ],
             ),
       actions: [
         TextButton(
-          onPressed: () {
-            Navigator.pop(
-              context,
-            );
-          },
-          child: const Text(
-            "Close",
-            style: TextStyle(
-              color:
-                  Colors.grey,
-            ),
-          ),
+          onPressed: () => Navigator.pop(context),
+          child: const Text("Close", style: TextStyle(color: Colors.grey)),
         ),
-        if (
-          hasUpdate &&
-          !isChecking
-        )
+        if (hasUpdate && !isChecking)
           ElevatedButton(
-            style:
-                ElevatedButton.styleFrom(
-              backgroundColor:
-                  Colors.blueAccent,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
             onPressed: () async {
-              final prefs =
-                  await SharedPreferences
-                      .getInstance();
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setString('saved_ssid', ssidCtrl.text.trim());
+              await prefs.setString('saved_pass', passCtrl.text);
 
-              await prefs.setString(
-                'saved_ssid',
-                ssidCtrl.text
-                    .trim(),
-              );
-
-              await prefs.setString(
-                'saved_pass',
-                passCtrl.text,
-              );
-
-              if (!context
-                  .mounted) {
-                return;
-              }
-
-              widget
-                  .onUpdateTriggered(
-                ssidCtrl.text,
-                passCtrl.text,
-                fwUrl,
-              );
-
-              Navigator.pop(
-                context,
-              );
+              if (!context.mounted) return;
+              widget.onUpdateTriggered(ssidCtrl.text, passCtrl.text, fwUrl);
+              Navigator.pop(context);
             },
-            child: const Text(
-              "Update Firmware",
-              style: TextStyle(
-                color:
-                    Colors.white,
-                fontWeight:
-                    FontWeight.bold,
-              ),
-            ),
+            child: const Text("Update Firmware", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
       ],
     );
