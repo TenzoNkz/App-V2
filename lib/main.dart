@@ -888,7 +888,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (key == "TMP") {
       final parsedTemp = double.tryParse(value);
-      hotsideTemp = parsedTemp != null && parsedTemp >= 998.0
+      hotsideTemp = parsedTemp == null || parsedTemp >= 998.0
           ? "--"
           : parsedTemp.toStringAsFixed(1);
       if (isCloudSyncing && _dbRef != null) {
@@ -1578,9 +1578,9 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
                   TextField(
                     controller: passCtrl,
                     style: const TextStyle(color: Colors.white),
-                    obscureText: true,
+                    obscureText: false,
                     decoration: const InputDecoration(
-                      labelText: "Password",
+                      labelText: "WiFi Password",
                       labelStyle: TextStyle(color: Colors.grey),
                       prefixIcon: Icon(Icons.lock, color: Colors.blueAccent),
                       enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.grey)),
