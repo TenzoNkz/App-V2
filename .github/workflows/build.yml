@@ -1,71 +1,56 @@
-name: Horizon Cooler MAGIC BUILD
+name: Horizon Cooler Build
+
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: 1. Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: 2. Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
-          distribution: 'zulu'
-          java-version: '17'
+          distribution: zulu
+          java-version: "17"
 
-      - name: 3. Set up Flutter SDK
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.3'
-          channel: 'stable'
+          flutter-version: "3.24.3"
+          channel: stable
           cache: true
 
-      - name: 4. MAGIC RESET ANDROID FOLDER & UPGRADE TO KOTLIN 2.1.0
-        run: |
-          echo "1. Menyelamatkan file google-services.json..."
-          cp android/app/google-services.json ./google-services.json || true
-          
-          echo "2. Menghapus folder android..."
-          rm -rf android
-          
-          echo "3. Membuat ulang pondasi Android dengan nama horizoncooler..."
-          flutter create --project-name horizoncooler . --platforms android --org com.horizontalzzz
-          
-          echo "4. Mengembalikan google-services.json..."
-          cp ./google-services.json android/app/
-          
-          echo "5. Mengupgrade Kotlin ke versi 2.1.0 (Latest) di settings.gradle..."
-          sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.1.0"/g' android/settings.gradle
-          
-          echo "6. Menyuntikkan Firebase & Google Services..."
-          sed -i 's/id "dev.flutter.flutter-plugin-loader" version "1.0.0"/id "dev.flutter.flutter-plugin-loader" version "1.0.0"\n    id "com.google.gms.google-services" version "4.4.1" apply false/g' android/settings.gradle
-          sed -i 's/id "dev.flutter.flutter-gradle-plugin"/id "dev.flutter.flutter-gradle-plugin"\n    id "com.google.gms.google-services"/g' android/app/build.gradle
-          
-          echo "" >> android/app/build.gradle
-          echo "dependencies {" >> android/app/build.gradle
-          echo "    implementation platform('com.google.firebase:firebase-bom:33.4.0')" >> android/app/build.gradle
-          echo "    implementation 'com.google.firebase:firebase-analytics'" >> android/app/build.gradle
-          echo "}" >> android/app/build.gradle
-          
-          echo "7. Membuka Gerbang Bluetooth di AndroidManifest..."
-          sed -i 's/<application/<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH" \/>\n    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" \/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" \/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" \/>\n    <application/g' android/app/src/main/AndroidManifest.xml
+      - name: Verify Flutter project
+        run: flutter doctor -v
 
-      - name: 5. Install Packages & Patch Plugin Cache
+      - name: Restore missing Gradle wrapper
+        shell: bash
         run: |
-          flutter pub get
-          echo "Menambal file internal flutter_blue_plus..."
-          find ~/.pub-cache -name "build.gradle" -path "*flutter_blue_plus*" -exec sed -i "s/flutter\.compileSdkVersion/34/g" {} \;
-          find ~/.pub-cache -name "build.gradle" -path "*flutter_blue_plus*" -exec sed -i "s/android {/android {\n    compileSdkVersion 34/g" {} \;
+          if [ ! -f android/gradlew ] || [ ! -f android/gradle/wrapper/gradle-wrapper.jar ]; then
+            flutter create --platforms=android --project-name=horizoncooler --org=com.horizontalzzz --no-pub .
+          fi
 
-      - name: 6. Build Release APK
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze Dart code
+        run: flutter analyze
+
+      - name: Run Flutter tests
+        run: flutter test
+
+      - name: Build release APK
         run: flutter build apk --release
 
-      - name: 7. Upload APK Artifact
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Horizon-Cooler-Release-APK
