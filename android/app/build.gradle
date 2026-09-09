@@ -7,6 +7,7 @@ plugins {
 
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file('local.properties')
+
 if (localPropertiesFile.exists()) {
     localPropertiesFile.withReader('UTF-8') { reader ->
         localProperties.load(reader)
@@ -14,19 +15,20 @@ if (localPropertiesFile.exists()) {
 }
 
 def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
+
 if (flutterVersionCode == null) {
     flutterVersionCode = '1'
 }
 
 def flutterVersionName = localProperties.getProperty('flutter.versionName')
+
 if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
 android {
     namespace "com.horizontalzzz.horizoncooler"
-    
-    // MUTLAK HARUS PAKAI SPASI SEPERTI INI, JANGAN PAKAI (=)
+
     compileSdkVersion 34
 
     compileOptions {
@@ -44,10 +46,10 @@ android {
 
     defaultConfig {
         applicationId "com.horizontalzzz.horizoncooler"
-        
-        // MUTLAK HARUS PAKAI SPASI
+
         minSdkVersion 23
         targetSdkVersion 34
+
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
     }
@@ -62,4 +64,3 @@ android {
 flutter {
     source = "../.."
 }
-
