@@ -16,6 +16,9 @@ void main() async {
   } catch (e) {
     debugPrint("Firebase Init Error: $e");
   }
+  await SystemChrome.setPreferredOrientations(const [
+    DeviceOrientation.portraitUp,
+  ]);
   runApp(const HorizonCoolerApp());
 }
 
@@ -59,10 +62,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool _connectionEverEstablished = false;
   Future<void> _commandWriteQueue = Future<void>.value();
-  int _lastBatteryProtectionLevel = -1;
   bool _syncFrameReceived = false;
   bool _isInitialSync = false;
   bool _isBatteryReadBusy = false;
+  int _lastSentBatteryProtectionLevel = -1;
   
   bool isConnected = false;
 
@@ -86,15 +89,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double phoneBatteryTemp = -1.0;
   bool phoneBatteryTempAvailable = false; 
   Timer? _batteryTempTimer;
-  Timer? _limitSendDebounce;
   int aiModeType = 0;
 
   int limitHot = 45;
   int limitBat5v = 25;
   int limitBat12v = 35;
 
-  int get limitBat9v =>
-      ((limitBat5v + limitBat12v) / 2).round();
+  int get limitBat9vMin => limitBat5v + 1;
+  int get limitBat9vMax => limitBat12v - 1;
 
   String _incomingBuffer = "";
   static const platformChannel = MethodChannel('horizon_cooler/battery_temp');
@@ -114,7 +116,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     dataSubscription?.cancel();
     targetDevice?.disconnect();
     _batteryTempTimer?.cancel();
-    _limitSendDebounce?.cancel();
     _firebaseConnectionSubscription?.cancel();
     super.dispose();
   }
@@ -151,8 +152,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
 
       if (valid) {
-        if ((nativeTemp - phoneBatteryTemp).abs() >= 0.1 ||
-            !phoneBatteryTempAvailable) {
+        final batteryTempChanged =
+            !phoneBatteryTempAvailable ||
+            (nativeTemp - phoneBatteryTemp).abs() >= 0.1;
+
+        if (batteryTempChanged) {
           setState(() {
             phoneBatteryTemp = nativeTemp;
             phoneBatteryTempAvailable = true;
@@ -160,14 +164,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
 
         if (isConnected && isAiModeOn && aiModeType == 1) {
-          final protectionLevel = _batteryProtectionLevel(nativeTemp);
-
-          if (protectionLevel != _lastBatteryProtectionLevel) {
-            _lastBatteryProtectionLevel = protectionLevel;
-            await sendCommand(
-              'BTP:${nativeTemp.toStringAsFixed(1)}',
+          final level = _batteryProtectionLevel(nativeTemp);
+          if (level != _lastSentBatteryProtectionLevel) {
+            final sent = await sendCommand(
+              'PHONE:BT=${nativeTemp.toStringAsFixed(1)}',
               showError: false,
             );
+            if (sent) {
+              _lastSentBatteryProtectionLevel = level;
+            }
           }
         }
 
@@ -187,12 +192,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         if (isConnected &&
             isAiModeOn &&
             aiModeType == 1 &&
-            _lastBatteryProtectionLevel != 0) {
-          _lastBatteryProtectionLevel = 0;
-          await sendCommand(
-            'BTP:-10.0',
+            _lastSentBatteryProtectionLevel != 0) {
+          final sent = await sendCommand(
+            'PHONE:BT=-10.0',
             showError: false,
           );
+          if (sent) {
+            _lastSentBatteryProtectionLevel = 0;
+          }
         }
 
         if (isCloudSyncing && _dbRef != null) {
@@ -228,7 +235,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _startRealtimeBatteryTempReader() {
     _batteryTempTimer?.cancel();
     _batteryTempTimer = Timer.periodic(
-      const Duration(seconds: 1),
+      const Duration(milliseconds: 250),
       (_) {
         _fetchBatteryTemperature();
       },
@@ -629,6 +636,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       rxChar = null;
       _connectionEverEstablished = false;
       _incomingBuffer = '';
+      _lastSentBatteryProtectionLevel = -1;
 
       connectionSubscription = device.connectionState.listen((state) async {
         if (state == BluetoothConnectionState.connected) {
@@ -638,7 +646,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               isConnected = false;
               _syncFrameReceived = false;
               _isInitialSync = true;
-              _lastBatteryProtectionLevel = -1;
             });
           }
           // Give the Android BLE stack and ESP32 a brief settle time after
@@ -665,9 +672,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               isAiModeOn = false;
               currentVersion = 'V?';
               _incomingBuffer = '';
-              _lastBatteryProtectionLevel = -1;
               _syncFrameReceived = false;
               _isInitialSync = false;
+              _lastSentBatteryProtectionLevel = -1;
             });
           }
           if (_connectionEverEstablished) {
@@ -777,16 +784,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return;
       }
 
-      await sendCommand('AIM:$aiModeType', showError: false);
-
+      final configParts = <String>[
+        'AI=${isAiModeOn ? 1 : 0}',
+        'AIM=$aiModeType',
+        'LHT=$limitHot',
+        'LB5=$limitBat5v',
+        'LB12=$limitBat12v',
+      ];
       if (phoneBatteryTempAvailable && aiModeType == 1) {
-        _lastBatteryProtectionLevel =
-            _batteryProtectionLevel(phoneBatteryTemp);
-        await sendCommand(
-          'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
-          showError: false,
+        configParts.add(
+          'BT=${phoneBatteryTemp.toStringAsFixed(1)}',
         );
       }
+      await sendCommand(
+        'CFG:${configParts.join(';')}',
+        showError: false,
+      );
+      _lastSentBatteryProtectionLevel =
+          phoneBatteryTempAvailable
+              ? _batteryProtectionLevel(phoneBatteryTemp)
+              : 0;
 
       if (mounted) {
         setState(() {
@@ -881,6 +898,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final key = line.substring(0, separator).trim();
     final value = line.substring(separator + 1).trim();
 
+    if (key == 'STATE' || key == 'RGBSTATE' || key == 'TEMPSET') {
+      var changed = false;
+      for (final part in value.split(';')) {
+        final p = part.trim();
+        final eq = p.indexOf('=');
+        if (eq <= 0) continue;
+        final subKey = p.substring(0, eq).trim();
+        final subValue = p.substring(eq + 1).trim();
+        if (_updateField('$subKey:$subValue')) {
+          changed = true;
+        }
+      }
+      return changed;
+    }
+
     if (key == "TMP") {
       final parsedTemp = double.tryParse(value);
       hotsideTemp = parsedTemp != null && parsedTemp >= 998.0
@@ -907,13 +939,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
       currentVersion = value;
     } else if (key == "MD") {
       rgbModeIndex = (int.tryParse(value) ?? 0);
+    } else if (key == "LIM") {
+      final parts = value.split(',');
+      if (parts.length == 4) {
+        final hot = int.tryParse(parts[0]);
+        final b5 = int.tryParse(parts[1]);
+        final b12 = int.tryParse(parts[3]);
+        if (hot != null && b5 != null && b12 != null) {
+          limitHot = hot;
+          limitBat5v = b5;
+          limitBat12v = b12;
+          _normalizeBatteryLimits();
+        }
+      }
     } else if (key == "LHT") {
       limitHot = int.tryParse(value) ?? 45;
     } else if (key == "LB5") {
       limitBat5v = int.tryParse(value) ?? 25;
       _normalizeBatteryLimits();
     } else if (key == "LB9") {
-      // Firmware reports the derived 9V midpoint.
+      // Firmware reports the locked 9V operating range as MIN-MAX.
+      // The editable thresholds remain LB5 and LB12.
     } else if (key == "LB12") {
       limitBat12v = int.tryParse(value) ?? 35;
       _normalizeBatteryLimits();
@@ -927,23 +973,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     limitBat5v = limitBat5v.clamp(10, 59).toInt();
     limitBat12v = limitBat12v.clamp(11, 60).toInt();
 
-    if (limitBat12v <= limitBat5v) {
+    // Keep at least one integer temperature inside the locked 9V band.
+    if (limitBat12v < limitBat5v + 2) {
       if (changed == 5) {
-        limitBat12v = (limitBat5v + 1).clamp(11, 60).toInt();
+        limitBat12v = (limitBat5v + 2).clamp(12, 60).toInt();
       } else {
-        limitBat5v = (limitBat12v - 1).clamp(10, 59).toInt();
+        limitBat5v = (limitBat12v - 2).clamp(10, 58).toInt();
       }
     }
-  }
-
-  void _queueBatteryLimitSettings() {
-    _limitSendDebounce?.cancel();
-    _limitSendDebounce = Timer(
-      const Duration(milliseconds: 250),
-      () {
-        _sendBatteryLimitSettings();
-      },
-    );
   }
 
   Future<void> _sendBatteryLimitSettings() async {
@@ -953,33 +990,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     _normalizeBatteryLimits();
 
-    await sendCommand(
-      'LB5:$limitBat5v',
-      showError: false,
-    );
-
-    await sendCommand(
-      'LB12:$limitBat12v',
-      showError: false,
-    );
-
-    if (isAiModeOn &&
-        aiModeType == 1 &&
-        phoneBatteryTempAvailable) {
-      _lastBatteryProtectionLevel =
-          _batteryProtectionLevel(phoneBatteryTemp);
-
-      await sendCommand(
-        'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
-        showError: false,
-      );
-
+    final tempParts = <String>[
+      'LHT=$limitHot',
+      'LB5=$limitBat5v',
+      'LB12=$limitBat12v',
+    ];
+    if (isAiModeOn && aiModeType == 1 && phoneBatteryTempAvailable) {
+      tempParts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
     }
+    await sendCommand(
+      'TEMPSET:${tempParts.join(';')}',
+      showError: false,
+    );
 
     if (isCloudSyncing && _dbRef != null) {
       await _dbRef!.child('settings/limit_hot').set(limitHot);
       await _dbRef!.child('settings/limit_bat_5v').set(limitBat5v);
-      await _dbRef!.child('settings/limit_bat_9v').set(limitBat9v);
+      await _dbRef!.child('settings/limit_bat_9v_min').set(limitBat9vMin);
+      await _dbRef!.child('settings/limit_bat_9v_max').set(limitBat9vMax);
       await _dbRef!.child('settings/limit_bat_12v').set(limitBat12v);
     }
   }
@@ -1067,11 +1095,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
 
     if (isConnected) {
-      sendCommand(
-        "LHT:45",
-        showError: false,
-      );
-      _queueBatteryLimitSettings();
+      _sendBatteryLimitSettings();
     }
 
     _showSnackBar(
@@ -1326,16 +1350,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onChanged: isConnected ? (val) async {
               setState(() => isAiModeOn = val);
               if (!val) {
-                _lastBatteryProtectionLevel = -1;
-              }
-              await sendCommand(val ? 'AION' : 'AIOFF', showError: false);
-              await sendCommand('AIM:$aiModeType', showError: false);
+                }
+              final adaptParts = <String>[
+                'ON=${val ? 1 : 0}',
+                'MODE=$aiModeType',
+              ];
               if (val && aiModeType == 1 && phoneBatteryTempAvailable) {
-                _lastBatteryProtectionLevel = _batteryProtectionLevel(phoneBatteryTemp);
-                await sendCommand(
-                  'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
-                  showError: false,
-                );
+                adaptParts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
+              }
+              final sent = await sendCommand(
+                'ADAPT:${adaptParts.join(';')}',
+                showError: false,
+              );
+              if (sent && val && aiModeType == 1 && phoneBatteryTempAvailable) {
+                _lastSentBatteryProtectionLevel =
+                    _batteryProtectionLevel(phoneBatteryTemp);
               }
             } : null,
           ),
@@ -1352,14 +1381,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return InkWell(
       onTap: isConnected ? () async {
         setState(() => aiModeType = index);
-        await sendCommand('AIM:$index', showError: false);
-        _lastBatteryProtectionLevel = -1;
-        if (index == 1 && phoneBatteryTempAvailable) {
-          _lastBatteryProtectionLevel = _batteryProtectionLevel(phoneBatteryTemp);
-          await sendCommand(
-            'BTP:${phoneBatteryTemp.toStringAsFixed(1)}',
-            showError: false,
-          );
+        final adaptParts = <String>[
+          'ON=${isAiModeOn ? 1 : 0}',
+          'MODE=$index',
+        ];
+        if (isAiModeOn && index == 1 && phoneBatteryTempAvailable) {
+          adaptParts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
+        }
+        final sent = await sendCommand(
+          'ADAPT:${adaptParts.join(';')}',
+          showError: false,
+        );
+        if (sent && isAiModeOn && index == 1 && phoneBatteryTempAvailable) {
+          _lastSentBatteryProtectionLevel =
+              _batteryProtectionLevel(phoneBatteryTemp);
         }
       } : null,
       child: Container(
@@ -1466,7 +1501,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildTempSettingMenu() {
     final batteryRangeText =
-        '$limitBat5v°C to $limitBat12v°C';
+        '$limitBat5v°C → $limitBat9vMin–$limitBat9vMax°C → $limitBat12v°C';
 
     return ListView(
       physics: const BouncingScrollPhysics(),
@@ -1539,25 +1574,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     limitBat5v = next;
                     _normalizeBatteryLimits(changed: 5);
                   });
-                  _queueBatteryLimitSettings();
+                  _sendBatteryLimitSettings();
                 },
                 onPlus: () {
                   if (!isConnected) return;
                   final next = (limitBat5v + 1).clamp(10, 59).toInt();
-                  if (next >= limitBat12v) return;
+                  if (next >= limitBat12v - 1) return;
                   setState(() {
                     limitBat5v = next;
                     _normalizeBatteryLimits(changed: 5);
                   });
-                  _queueBatteryLimitSettings();
+                  _sendBatteryLimitSettings();
                 },
               ),
               const Divider(height: 18),
-              _batteryLimitRow(
+              _batteryLimitRangeRow(
                 title: '9V',
-                subtitle: 'Between 5V and 12V • LOCKED',
-                value: limitBat9v,
-                enabled: false,
+                subtitle: 'Automatic range • LOCKED',
+                low: limitBat9vMin,
+                high: limitBat9vMax,
               ),
               const Divider(height: 18),
               _batteryLimitRow(
@@ -1568,12 +1603,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onMinus: () {
                   if (!isConnected) return;
                   final next = (limitBat12v - 1).clamp(11, 60).toInt();
-                  if (next <= limitBat5v) return;
+                  if (next <= limitBat5v + 1) return;
                   setState(() {
                     limitBat12v = next;
                     _normalizeBatteryLimits(changed: 12);
                   });
-                  _queueBatteryLimitSettings();
+                  _sendBatteryLimitSettings();
                 },
                 onPlus: () {
                   if (!isConnected) return;
@@ -1582,12 +1617,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     limitBat12v = next;
                     _normalizeBatteryLimits(changed: 12);
                   });
-                  _queueBatteryLimitSettings();
+                  _sendBatteryLimitSettings();
                 },
               ),
               const SizedBox(height: 10),
               Text(
-                'Battery limits locked to 10°C–60°C • Current range: $batteryRangeText',
+                '9V range is locked between the 5V and 12V thresholds • Current: $batteryRangeText',
                 style: TextStyle(
                   color: Colors.grey.shade600,
                   fontSize: 11,
@@ -1616,6 +1651,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
         const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  Widget _batteryLimitRangeRow({
+    required String title,
+    required String subtitle,
+    required int low,
+    required int high,
+  }) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 44,
+          child: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              color: Colors.grey,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$low–$high°C',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 10,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 96),
       ],
     );
   }
