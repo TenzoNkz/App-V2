@@ -987,7 +987,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<bool> sendCommand(String cmd, {bool showError = true}) {
     final completer = Completer<bool>();
     _commandWriteQueue = _commandWriteQueue.then((_) async {
-      if (rxChar == null || !isConnected) {
+      // During the initial handshake, isConnected intentionally remains false
+      // until the framed SYNC response is received. The initial SYNC command
+      // must therefore be allowed before isConnected becomes true.
+      final canWriteDuringInitialSync = _isInitialSync && _connectionEverEstablished;
+      if (rxChar == null || (!isConnected && !canWriteDuringInitialSync)) {
         if (showError && mounted) {
           _showSnackBar('Bluetooth Not Synchronized!', color: Colors.orangeAccent);
         }
