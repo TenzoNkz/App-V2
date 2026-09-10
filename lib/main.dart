@@ -84,6 +84,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DatabaseReference? _dbRef;
   final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
+  String? _lastFirebaseBatteryTemp;
+  bool? _lastFirebaseBatteryTempAvailable;
+
   int selectedMenuIndex = 0; 
   double phoneBatteryTemp = -1.0;
   bool phoneBatteryTempAvailable = false; 
@@ -131,6 +134,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _syncBatteryTelemetryToFirebase({
+    required bool available,
+    String? temperature,
+  }) async {
+    if (!isCloudSyncing || _dbRef == null) {
+      return;
+    }
+
+    if (available &&
+        _lastFirebaseBatteryTemp == temperature &&
+        _lastFirebaseBatteryTempAvailable == true) {
+      return;
+    }
+
+    if (!available &&
+        _lastFirebaseBatteryTempAvailable == false) {
+      return;
+    }
+
+    final update = <String, Object?>{
+      'telemetry/battery_temp_available': available,
+      'telemetry/battery_temp': available ? temperature : null,
+    };
+
+    try {
+      await _dbRef!.update(update);
+      _lastFirebaseBatteryTemp = available ? temperature : null;
+      _lastFirebaseBatteryTempAvailable = available;
+    } catch (e) {
+      debugPrint('Firebase battery telemetry error: $e');
+    }
+  }
+
   Future<void> _fetchBatteryTemperature() async {
     if (_isBatteryReadBusy) {
       return;
@@ -171,12 +207,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           );
         }
 
-        if (isCloudSyncing && _dbRef != null) {
-          await _dbRef!.child('telemetry/battery_temp').set(
-            nativeTemp.toStringAsFixed(1),
-          );
-          await _dbRef!.child('telemetry/battery_temp_available').set(true);
-        }
+        await _syncBatteryTelemetryToFirebase(
+          available: true,
+          temperature: nativeTemp.toStringAsFixed(1),
+        );
       } else {
         if (phoneBatteryTempAvailable) {
           setState(() {
@@ -189,10 +223,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           await sendCommand('PHONE:BT=-10.0', showError: false);
         }
 
-        if (isCloudSyncing && _dbRef != null) {
-          await _dbRef!.child('telemetry/battery_temp').set(null);
-          await _dbRef!.child('telemetry/battery_temp_available').set(false);
-        }
+        await _syncBatteryTelemetryToFirebase(
+          available: false,
+        );
       }
     } catch (e) {
       debugPrint('Direct battery fetch error: $e');
@@ -210,7 +243,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _startRealtimeBatteryTempReader() {
     _batteryTempTimer?.cancel();
     _batteryTempTimer = Timer.periodic(
-      const Duration(milliseconds: 250),
+      const Duration(milliseconds: 500),
       (_) {
         _fetchBatteryTemperature();
       },
@@ -340,11 +373,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _initFirebaseMonitoring() {
     if (_dbRef == null) return;
     _firebaseConnectionSubscription?.cancel();
-    _firebaseConnectionSubscription = _dbRef!.child('.info/connected').onValue.listen((event) {
+    _firebaseConnectionSubscription =
+        _dbRef!.child('.info/connected').onValue.listen((event) {
       if (!mounted) return;
-      final value = event.snapshot.value;
+
+      final next = event.snapshot.value is bool && event.snapshot.value;
+
+      if (!next) {
+        _lastFirebaseBatteryTemp = null;
+        _lastFirebaseBatteryTempAvailable = null;
+      }
+
       setState(() {
-        isCloudSyncing = value is bool && value;
+        isCloudSyncing = next;
       });
     });
   }
@@ -1481,12 +1522,38 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
     }
   }
 
-  int _versionValue(String version) {
-    final match = RegExp(r'^V(\d+)(?:\.(\d+))?$').firstMatch(version.trim().toUpperCase());
-    if (match == null) return -1;
-    final major = int.tryParse(match.group(1)!) ?? 0;
-    final minor = int.tryParse(match.group(2) ?? '0') ?? 0;
-    return major * 100 + minor;
+  List<int>? _parseFirmwareVersion(String version) {
+    final match = RegExp(
+      r'^V(\d+)(?:\.(\d+))?$',
+    ).firstMatch(version.trim().toUpperCase());
+
+    if (match == null) {
+      return null;
+    }
+
+    final major = int.tryParse(match.group(1)!);
+    final minor = int.tryParse(match.group(2) ?? '0');
+
+    if (major == null || minor == null) {
+      return null;
+    }
+
+    return <int>[major, minor];
+  }
+
+  bool _isNewerFirmwareVersion(String latest, String current) {
+    final latestParts = _parseFirmwareVersion(latest);
+    final currentParts = _parseFirmwareVersion(current);
+
+    if (latestParts == null || currentParts == null) {
+      return false;
+    }
+
+    if (latestParts[0] != currentParts[0]) {
+      return latestParts[0] > currentParts[0];
+    }
+
+    return latestParts[1] > currentParts[1];
   }
 
   Future<void> _checkFirebaseForUpdate() async {
@@ -1523,9 +1590,12 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
       setState(() {
         isChecking = false;
         hasUpdate = (widget.currentVersion != 'V?' &&
-            _versionValue(latestVersion) > _versionValue(widget.currentVersion) &&
             latestVersion.isNotEmpty &&
-            fwUrl.isNotEmpty);
+            fwUrl.isNotEmpty &&
+            _isNewerFirmwareVersion(
+              latestVersion,
+              widget.currentVersion,
+            ));
       });
     }
   }
@@ -1578,7 +1648,7 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
                   TextField(
                     controller: passCtrl,
                     style: const TextStyle(color: Colors.white),
-                    obscureText: false,
+                    obscureText: true,
                     decoration: const InputDecoration(
                       labelText: "WiFi Password",
                       labelStyle: TextStyle(color: Colors.grey),
