@@ -110,6 +110,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Timer? _batteryTempTimer;
   Timer? _voltageCooldownTimer;
   bool _voltageCooldownActive = false;
+  bool _voltageTransitionBusy = false;
   int aiModeType = 0;
 
   int limitHot = 45;
