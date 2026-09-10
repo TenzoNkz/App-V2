@@ -1354,7 +1354,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
-    // The two-second guard starts at the moment the user first presses the
+    // The one-second guard starts at the moment the user first presses the
     // voltage button, not after the ESP32 executes the transition.
     _startVoltageCooldown();
 
@@ -2035,7 +2035,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-const Duration voltageCooldownDuration = Duration(seconds: 2);
+const Duration voltageCooldownDuration = Duration(seconds: 1);
 
 bool isVoltageCommand(String cmd) {
   final upper = cmd.trim().toUpperCase();
