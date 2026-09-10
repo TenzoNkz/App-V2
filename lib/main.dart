@@ -65,6 +65,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _syncFrameReceived = false;
   bool _isInitialSync = false;
   bool _isBatteryReadBusy = false;
+
+  int? _pendingBrightnessRaw;
+  bool _brightnessCommandSending = false;
   
   bool isConnected = false;
 
@@ -77,6 +80,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool isRgbOn = true;
   bool isAiModeOn = false;
   double brightness = 100;
+  int? _lastCommittedBrightnessRaw;
   String currentVersion = "V?";
   int rgbModeIndex = 0;
   
@@ -823,6 +827,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         'CFG:${configParts.join(';')}',
         showError: false,
       );
+      _lastCommittedBrightnessRaw = brightnessRaw;
       if (mounted) {
         setState(() {
           isConnected = true;
@@ -1030,6 +1035,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  void _queueBrightnessUpdate(double value) {
+    // Update the app preview while dragging, but keep the device command
+    // deferred until the slider is released.
+    setState(() => brightness = value.clamp(1.0, 100.0));
+  }
+
+  Future<void> _commitBrightnessUpdate() async {
+    if (!isConnected) {
+      return;
+    }
+
+    final raw = (brightness / 100.0 * 255.0).round().clamp(1, 255);
+    if (_lastCommittedBrightnessRaw == raw) {
+      return;
+    }
+
+    final success = await sendCommand('BR:$raw', showError: false);
+    if (success) {
+      _lastCommittedBrightnessRaw = raw;
+    }
+  }
+
   Future<bool> sendCommand(String cmd, {bool showError = true}) {
     final completer = Completer<bool>();
     _commandWriteQueue = _commandWriteQueue.then((_) async {
@@ -1178,10 +1205,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   Row(
                     children: [
-                      Expanded(child: _buildTabMenu('VOLTAGE', 0)),
-                      Expanded(child: _buildTabMenu('ADAPTIVE', 1)),
-                      Expanded(child: _buildTabMenu('LED', 2)),
-                      Expanded(child: _buildTabMenu('TEMPERATURE', 3)),
+                      _buildTabMenu('VOLTAGE', 0),
+                      _buildTabMenu('ADAPTIVE', 1),
+                      _buildTabMenu('LED', 2),
+                      _buildTabMenu('TEMPERATURE', 3),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -1220,22 +1247,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildTabMenu(String title, int index) {
     final isSelected = selectedMenuIndex == index;
-    return GestureDetector(
-      onTap: () => setState(() => selectedMenuIndex = index),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        margin: const EdgeInsets.symmetric(horizontal: 2),
-        padding: const EdgeInsets.symmetric(vertical: 11),
-        decoration: BoxDecoration(color: isSelected ? Colors.black : Colors.transparent, borderRadius: BorderRadius.circular(18)),
-        child: Center(
-          child: Text(title, textAlign: TextAlign.center, style: TextStyle(color: isSelected ? Colors.white : Colors.black54, fontWeight: FontWeight.w800, fontSize: 11)),
+    return Expanded(
+      child: Semantics(
+        button: true,
+        selected: isSelected,
+        label: title,
+        child: GestureDetector(
+          onTap: () => setState(() => selectedMenuIndex = index),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            margin: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              color: isSelected ? const Color(0xFF17181C) : const Color(0xFFF2F2F4),
+              borderRadius: BorderRadius.circular(15),
+              border: Border.all(
+                color: isSelected ? const Color(0xFF17181C) : const Color(0xFFE5E5E8),
+              ),
+            ),
+            child: Center(
+              child: Text(
+                title,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : const Color(0xFF5E6068),
+                  fontWeight: FontWeight.w800,
+                  fontSize: 10.5,
+                  letterSpacing: 0.1,
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
   }
 
   Widget _buildMenuContent() {
-    final content = switch (selectedMenuIndex) {
+    final Widget content = switch (selectedMenuIndex) {
       0 => _buildVoltageMenu(),
       1 => _buildAiMenu(),
       2 => _buildRgbMenu(),
@@ -1243,24 +1294,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _ => const SizedBox.shrink(),
     };
 
+    final wrapped = Padding(
+      padding: const EdgeInsets.fromLTRB(2, 2, 2, 18),
+      child: content,
+    );
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (!constraints.hasBoundedWidth || !constraints.hasBoundedHeight) {
-          return content;
+        // Temperature is the intentionally scrollable long menu. The tiny
+        // height fallback is only for compact test/small-screen constraints;
+        // normal phone layouts keep the shorter menus at their natural size.
+        final shouldScroll =
+            selectedMenuIndex == 3 ||
+            (constraints.hasBoundedHeight && constraints.maxHeight < 320);
+
+        if (shouldScroll) {
+          return SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            padding: EdgeInsets.zero,
+            child: wrapped,
+          );
         }
 
-        // Keep the DISPLAY panel fixed and non-scrollable while allowing
-        // the submenu to scale down on compact test/small-screen layouts.
-        // On normal phone sizes the content remains at its natural size.
-        return ClipRect(
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.topCenter,
-            child: SizedBox(
-              width: constraints.maxWidth,
-              child: content,
-            ),
-          ),
+        return Align(
+          alignment: Alignment.topCenter,
+          child: wrapped,
         );
       },
     );
@@ -1720,18 +1778,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       activeColor: Colors.black,
                       inactiveColor: Colors.black12,
                       onChanged: isConnected
-                          ? (val) => setState(() => brightness = val)
+                          ? _queueBrightnessUpdate
                           : null,
                       onChangeEnd: isConnected
-                          ? (val) {
-                              final raw = (val / 100 * 255)
-                                  .round()
-                                  .clamp(1, 255);
-                              sendCommand(
-                                'BR:$raw',
-                                showError: false,
-                              );
-                            }
+                          ? (_) => _commitBrightnessUpdate()
                           : null,
                     ),
                   ),
@@ -1758,12 +1808,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildTempSettingMenu() {
     final midLow = limitBat9vMin;
     final midHigh = limitBat9vMax;
+    final locked = isAiModeOn;
+    final controlsEnabled = isConnected && !locked;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _sectionTitle(
           'Temperature',
-          subtitle: 'Protection limits are applied by the ESP32 in real time.',
+          subtitle: locked
+              ? 'Adaptive is active — protection limits are temporarily locked.'
+              : 'Protection limits are applied by the ESP32 in real time.',
         ),
         _premiumCard(
           padding: const EdgeInsets.fromLTRB(13, 10, 13, 10),
@@ -1771,15 +1826,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
             'Hotside Overheat Limit',
             limitHot,
             (v) {
-              if (!isConnected) return;
-              final next = v.clamp(30, 60).toInt();
+              if (!controlsEnabled) return;
+              final next = v.clamp(40, 50).toInt();
               if (next == limitHot) return;
               setState(() => limitHot = next);
               sendCommand('LHT:$next', showError: false);
             },
             '°C',
-            30,
-            60,
+            40,
+            50,
           ),
         ),
         _sectionTitle(
@@ -1794,9 +1849,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 title: '5V',
                 subtitle: '< $limitBat5v°C  •  Below',
                 value: limitBat5v,
-                enabled: isConnected,
+                enabled: controlsEnabled,
                 onMinus: () {
-                  if (!isConnected) return;
+                  if (!controlsEnabled) return;
                   setState(() {
                     limitBat5v =
                         (limitBat5v - 1).clamp(20, 48).toInt();
@@ -1805,7 +1860,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   _sendBatteryLimitSettings();
                 },
                 onPlus: () {
-                  if (!isConnected) return;
+                  if (!controlsEnabled) return;
                   final next =
                       (limitBat5v + 1).clamp(20, 48).toInt();
                   if (next >= limitBat12v - 1) return;
@@ -1828,9 +1883,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 title: '12V',
                 subtitle: '> $limitBat12v°C  •  Above',
                 value: limitBat12v,
-                enabled: isConnected,
+                enabled: controlsEnabled,
                 onMinus: () {
-                  if (!isConnected) return;
+                  if (!controlsEnabled) return;
                   final next =
                       (limitBat12v - 1).clamp(22, 50).toInt();
                   if (next <= limitBat5v + 1) return;
@@ -1841,7 +1896,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   _sendBatteryLimitSettings();
                 },
                 onPlus: () {
-                  if (!isConnected) return;
+                  if (!controlsEnabled) return;
                   final next =
                       (limitBat12v + 1).clamp(22, 50).toInt();
                   setState(() {
@@ -1855,11 +1910,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
         const SizedBox(height: 4),
+        if (locked)
+          Padding(
+            padding: const EdgeInsets.only(top: 4, bottom: 6),
+            child: _premiumCard(
+              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.lock_rounded, size: 18, color: Colors.orangeAccent),
+                  const SizedBox(width: 9),
+                  const Expanded(
+                    child: Text(
+                      'Temperature settings are locked while Adaptive Mode is ON.',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         Row(
           children: [
             Expanded(
               child: Text(
-                '20–50°C • 9V range derived automatically',
+                '40–50°C Hotside • 9V range derived automatically',
                 style: const TextStyle(
                   color: Colors.black45,
                   fontSize: 9,
@@ -1881,7 +1955,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   borderRadius: BorderRadius.circular(13),
                 ),
               ),
-              onPressed: isConnected ? resetTempSettings : null,
+              onPressed: controlsEnabled ? resetTempSettings : null,
               icon: const Icon(
                 Icons.restart_alt_rounded,
                 size: 17,
@@ -2107,7 +2181,7 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
                   TextField(
                     controller: passCtrl,
                     style: const TextStyle(color: Colors.white),
-                    obscureText: true,
+                    obscureText: false,
                     decoration: const InputDecoration(
                       labelText: "WiFi Password",
                       labelStyle: TextStyle(color: Colors.grey),
