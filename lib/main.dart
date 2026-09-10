@@ -1381,6 +1381,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  void _cancelVoltageCooldown() {
+    _voltageCooldownTimer?.cancel();
+    _voltageCooldownTimer = null;
+
+    if (!mounted) {
+      _voltageCooldownActive = false;
+      _voltageTransitionBusy = false;
+      return;
+    }
+
+    setState(() {
+      _voltageCooldownActive = false;
+      _voltageTransitionBusy = false;
+    });
+  }
+
   void _startVoltageCooldown() {
     _voltageCooldownTimer?.cancel();
     if (!mounted) return;
