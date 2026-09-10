@@ -1247,8 +1247,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _premiumCard({required Widget child, EdgeInsetsGeometry? padding}) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.symmetric(vertical: 7),
-      padding: padding ?? const EdgeInsets.all(16),
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      padding: padding ?? const EdgeInsets.all(13),
       decoration: BoxDecoration(
         color: const Color(0xFFF7F7F8),
         borderRadius: BorderRadius.circular(22),
@@ -1277,77 +1277,214 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildVoltageMenu() {
     final locked = isAiModeOn;
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 24),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionTitle('Voltage Control', subtitle: locked ? 'Adaptive is controlling the output voltage.' : 'Choose the output voltage manually.'),
+        _sectionTitle(
+          'Voltage Control',
+          subtitle: locked
+              ? 'Adaptive is controlling the output voltage.'
+              : 'Choose the output voltage manually.',
+        ),
         _premiumCard(
-          padding: const EdgeInsets.fromLTRB(14, 6, 14, 14),
-          child: Column(children: [
-            _voltageRow('5V', 'Low Mode', locked),
-            _voltageRow('9V', 'Mid Mode', locked),
-            _voltageRow('12V', 'High Mode', locked, isLast: true),
-          ]),
+          padding: const EdgeInsets.fromLTRB(10, 5, 10, 10),
+          child: Column(
+            children: [
+              _voltageRow('5V', 'Low Mode', locked),
+              _voltageRow('9V', 'Mid Mode', locked),
+              _voltageRow('12V', 'High Mode', locked, isLast: true),
+            ],
+          ),
         ),
       ],
     );
   }
 
-  Widget _voltageRow(String value, String mode, bool locked, {bool isLast = false}) {
+  Widget _voltageRow(
+    String value,
+    String mode,
+    bool locked, {
+    bool isLast = false,
+  }) {
     final isActive = voltage == value;
     return Column(
       children: [
         InkWell(
-          borderRadius: BorderRadius.circular(17),
-          onTap: !isConnected || locked ? null : () => sendCommand(value, showError: false),
+          borderRadius: BorderRadius.circular(15),
+          onTap: !isConnected || locked
+              ? null
+              : () => sendCommand(value, showError: false),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
-            decoration: BoxDecoration(color: isActive ? Colors.black : Colors.white, borderRadius: BorderRadius.circular(17), border: Border.all(color: isActive ? Colors.black : const Color(0xFFE3E3E5))),
-            child: Row(children: [
-              Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: isActive ? Colors.blueAccent : Colors.black26)),
-              const SizedBox(width: 12),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(value, style: TextStyle(color: isActive ? Colors.white : Colors.black, fontWeight: FontWeight.w900, fontSize: 19)),
-                Text(mode, style: TextStyle(color: isActive ? Colors.white70 : Colors.black45, fontSize: 11, fontWeight: FontWeight.w700)),
-              ])),
-              if (locked) const Icon(Icons.lock_outline, size: 18, color: Colors.black38),
-              if (isActive && !locked) const Icon(Icons.check_circle, size: 20, color: Colors.blueAccent),
-            ]),
+            padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+            decoration: BoxDecoration(
+              color: isActive ? Colors.black : Colors.white,
+              borderRadius: BorderRadius.circular(15),
+              border: Border.all(
+                color: isActive
+                    ? Colors.black
+                    : const Color(0xFFE3E3E5),
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isActive ? Colors.blueAccent : Colors.black26,
+                  ),
+                ),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        value,
+                        style: TextStyle(
+                          color: isActive ? Colors.white : Colors.black,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                          height: 1.0,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        mode,
+                        style: TextStyle(
+                          color: isActive ? Colors.white70 : Colors.black45,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (locked)
+                  const Icon(
+                    Icons.lock_outline,
+                    size: 17,
+                    color: Colors.black38,
+                  ),
+                if (isActive && !locked)
+                  const Icon(
+                    Icons.check_circle,
+                    size: 20,
+                    color: Colors.blueAccent,
+                  ),
+              ],
+            ),
           ),
         ),
-        if (!isLast) const SizedBox(height: 8),
+        if (!isLast) const SizedBox(height: 6),
       ],
     );
   }
 
   Widget _buildAiMenu() {
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 24),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionTitle('Adaptive Switch', subtitle: 'Automatic voltage control prioritizes overheat protection.'),
-        _premiumCard(
-          child: Row(children: [
-            Container(width: 46, height: 46, decoration: BoxDecoration(shape: BoxShape.circle, color: isAiModeOn ? Colors.green.withValues(alpha: 0.13) : Colors.black.withValues(alpha: 0.06)), child: Icon(isAiModeOn ? Icons.shield_rounded : Icons.shield_outlined, color: isAiModeOn ? Colors.green.shade700 : Colors.black45)),
-            const SizedBox(width: 13),
-            const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Adaptive Switch', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900)), SizedBox(height: 3), Text('Master control', style: TextStyle(fontSize: 11, color: Colors.black45, fontWeight: FontWeight.w600))])),
-            Switch(
-              value: isConnected && isAiModeOn,
-              activeThumbColor: Colors.green,
-              onChanged: isConnected ? (val) async {
-                setState(() => isAiModeOn = val);
-                final parts = <String>['ON=${val ? 1 : 0}', 'MODE=$aiModeType'];
-                if (val && aiModeType == 1 && phoneBatteryTempAvailable) parts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
-                await sendCommand('ADAPT:${parts.join(';')}', showError: false);
-              } : null,
-            ),
-          ]),
+        _sectionTitle(
+          'Adaptive Switch',
+          subtitle:
+              'Automatic voltage control prioritizes overheat protection.',
         ),
-        _sectionTitle('Overheat Protection', subtitle: 'Mode selection is locked while Adaptive is ON.'),
-        _adaptiveModeCard(0, 'Overheat Protection', 'Automatic voltage reduction from hotside temperature.'),
-        _adaptiveModeCard(1, 'Overheat + Battery Protection', 'Adds the phone battery temperature safety ceiling.'),
+        _premiumCard(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isAiModeOn
+                      ? Colors.green.withValues(alpha: 0.13)
+                      : Colors.black.withValues(alpha: 0.06),
+                ),
+                child: Icon(
+                  isAiModeOn ? Icons.shield_rounded : Icons.shield_outlined,
+                  color: isAiModeOn ? Colors.green.shade700 : Colors.black45,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Adaptive Switch',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                        height: 1.0,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Master control',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.black45,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: isConnected && isAiModeOn,
+                activeThumbColor: Colors.green,
+                onChanged: isConnected
+                    ? (val) async {
+                        setState(() => isAiModeOn = val);
+                        final parts = <String>[
+                          'ON=${val ? 1 : 0}',
+                          'MODE=$aiModeType',
+                        ];
+                        if (val &&
+                            aiModeType == 1 &&
+                            phoneBatteryTempAvailable) {
+                          parts.add(
+                            'BT=${phoneBatteryTemp.toStringAsFixed(1)}',
+                          );
+                        }
+                        await sendCommand(
+                          'ADAPT:${parts.join(';')}',
+                          showError: false,
+                        );
+                      }
+                    : null,
+              ),
+            ],
+          ),
+        ),
+        _sectionTitle(
+          'Overheat Protection',
+          subtitle: 'Mode selection is locked while Adaptive is ON.',
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: _adaptiveModeCard(
+                0,
+                'Overheat Protection',
+                'Hotside temperature',
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _adaptiveModeCard(
+                1,
+                'Overheat + Battery',
+                'Adds battery ceiling',
+              ),
+            ),
+          ],
+        ),
       ],
     );
   }
@@ -1358,54 +1495,239 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Opacity(
       opacity: locked ? 0.55 : 1.0,
       child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: !isConnected || locked ? null : () async {
-          setState(() => aiModeType = index);
-          final parts = <String>['ON=${isAiModeOn ? 1 : 0}', 'MODE=$index'];
-          if (isAiModeOn && index == 1 && phoneBatteryTempAvailable) parts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
-          await sendCommand('ADAPT:${parts.join(';')}', showError: false);
-        },
-        child: _premiumCard(child: Row(children: [
-          Icon(selected ? Icons.radio_button_checked : Icons.radio_button_off, color: selected ? Colors.blueAccent : Colors.black26),
-          const SizedBox(width: 12),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14)), const SizedBox(height: 3), Text(subtitle, style: const TextStyle(color: Colors.black45, fontSize: 11, fontWeight: FontWeight.w600))])),
-          if (locked) const Icon(Icons.lock_outline, size: 18, color: Colors.black38),
-        ])),
+        borderRadius: BorderRadius.circular(18),
+        onTap: !isConnected || locked
+            ? null
+            : () async {
+                setState(() => aiModeType = index);
+                final parts = <String>[
+                  'ON=${isAiModeOn ? 1 : 0}',
+                  'MODE=$index',
+                ];
+                if (isAiModeOn && index == 1 && phoneBatteryTempAvailable) {
+                  parts.add(
+                    'BT=${phoneBatteryTemp.toStringAsFixed(1)}',
+                  );
+                }
+                await sendCommand(
+                  'ADAPT:${parts.join(';')}',
+                  showError: false,
+                );
+              },
+        child: _premiumCard(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                selected
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+                color: selected ? Colors.blueAccent : Colors.black26,
+                size: 22,
+              ),
+              const SizedBox(height: 7),
+              Text(
+                title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                subtitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.black45,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (locked) ...[
+                const SizedBox(height: 5),
+                const Icon(
+                  Icons.lock_outline,
+                  size: 16,
+                  color: Colors.black38,
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
 
   Widget _buildRgbMenu() {
     final percent = brightness.clamp(1, 100).round();
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 24),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionTitle('LED Control', subtitle: 'Brightness 1–100%. Zero is reserved for LED OFF.'),
+        _sectionTitle(
+          'LED Control',
+          subtitle: 'Brightness 1–100%. Zero is reserved for LED OFF.',
+        ),
         _premiumCard(
-          child: Column(children: [
-            Row(children: [
-              Container(width: 46, height: 46, decoration: BoxDecoration(shape: BoxShape.circle, color: isRgbOn ? Colors.black : Colors.black.withValues(alpha: 0.06)), child: Icon(Icons.lightbulb_rounded, color: isRgbOn ? Colors.white : Colors.black38)),
-              const SizedBox(width: 13),
-              const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('LED Power', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900)), SizedBox(height: 3), Text('RGB illumination', style: TextStyle(fontSize: 11, color: Colors.black45, fontWeight: FontWeight.w600))])),
-              Switch(value: isConnected && isRgbOn, activeThumbColor: Colors.blueAccent, onChanged: isConnected ? (_) => sendCommand('RGBTOGGLE', showError: false) : null),
-            ]),
-            const Divider(height: 26),
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              IconButton(icon: const Icon(Icons.chevron_left_rounded, size: 30), onPressed: isConnected ? () => sendCommand('RGBPREV', showError: false) : null),
-              Container(constraints: const BoxConstraints(minWidth: 110), padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFE4E4E6))), child: Text('Mode $rgbModeIndex', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15))),
-              IconButton(icon: const Icon(Icons.chevron_right_rounded, size: 30), onPressed: isConnected ? () => sendCommand('RGBNEXT', showError: false) : null),
-            ]),
-            const SizedBox(height: 8),
-            Row(children: [
-              const Icon(Icons.brightness_low_rounded, color: Colors.black38),
-              Expanded(child: Slider(value: brightness.clamp(1, 100).toDouble(), min: 1, max: 100, activeColor: Colors.black, inactiveColor: Colors.black12, onChanged: isConnected ? (val) => setState(() => brightness = val) : null, onChangeEnd: isConnected ? (val) {
-                final raw = (val / 100 * 255).round().clamp(1, 255);
-                sendCommand('BR:$raw', showError: false);
-              } : null)),
-              SizedBox(width: 46, child: Text('$percent%', textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w900))),
-            ]),
-          ]),
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isRgbOn
+                          ? Colors.black
+                          : Colors.black.withValues(alpha: 0.06),
+                    ),
+                    child: Icon(
+                      Icons.lightbulb_rounded,
+                      color: isRgbOn ? Colors.white : Colors.black38,
+                      size: 21,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'LED Power',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        SizedBox(height: 3),
+                        Text(
+                          'RGB illumination',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.black45,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Switch(
+                    value: isConnected && isRgbOn,
+                    activeThumbColor: Colors.blueAccent,
+                    onChanged: isConnected
+                        ? (_) => sendCommand(
+                              'RGBTOGGLE',
+                              showError: false,
+                            )
+                        : null,
+                  ),
+                ],
+              ),
+              const Divider(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    icon: const Icon(
+                      Icons.chevron_left_rounded,
+                      size: 28,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: isConnected
+                        ? () => sendCommand(
+                              'RGBPREV',
+                              showError: false,
+                            )
+                        : null,
+                  ),
+                  Container(
+                    width: 110,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 9,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(13),
+                      border: Border.all(
+                        color: const Color(0xFFE4E4E6),
+                      ),
+                    ),
+                    child: Text(
+                      'Mode $rgbModeIndex',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.chevron_right_rounded,
+                      size: 28,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: isConnected
+                        ? () => sendCommand(
+                              'RGBNEXT',
+                              showError: false,
+                            )
+                        : null,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.brightness_low_rounded,
+                    color: Colors.black38,
+                    size: 20,
+                  ),
+                  Expanded(
+                    child: Slider(
+                      value: brightness.clamp(1, 100).toDouble(),
+                      min: 1,
+                      max: 100,
+                      activeColor: Colors.black,
+                      inactiveColor: Colors.black12,
+                      onChanged: isConnected
+                          ? (val) => setState(() => brightness = val)
+                          : null,
+                      onChangeEnd: isConnected
+                          ? (val) {
+                              final raw = (val / 100 * 255)
+                                  .round()
+                                  .clamp(1, 255);
+                              sendCommand(
+                                'BR:$raw',
+                                showError: false,
+                              );
+                            }
+                          : null,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 42,
+                    child: Text(
+                      '$percent%',
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -1414,46 +1736,157 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildTempSettingMenu() {
     final midLow = limitBat9vMin;
     final midHigh = limitBat9vMax;
-    return ListView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 24),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionTitle('Temperature', subtitle: 'Protection limits are applied by the ESP32 in real time.'),
-        _premiumCard(child: _tempAdjusterTile('Hotside Overheat Limit', limitHot, (v) {
-          if (!isConnected) return;
-          final next = v.clamp(30, 60).toInt();
-          if (next == limitHot) return;
-          setState(() => limitHot = next);
-          sendCommand('LHT:$next', showError: false);
-        }, '°C', 30, 60)),
-        _sectionTitle('Battery Protection', subtitle: '9V is automatically centered between the 5V and 12V thresholds.'),
-        _premiumCard(child: Column(children: [
-          _batteryLimitRow(title: '5V', subtitle: '< $limitBat5v°C  •  Below', value: limitBat5v, enabled: isConnected, onMinus: () { if (!isConnected) return; setState(() { limitBat5v = (limitBat5v - 1).clamp(20, 48).toInt(); _normalizeBatteryLimits(changed: 5); }); _sendBatteryLimitSettings(); }, onPlus: () { if (!isConnected) return; final next = (limitBat5v + 1).clamp(20, 48).toInt(); if (next >= limitBat12v - 1) return; setState(() { limitBat5v = next; _normalizeBatteryLimits(changed: 5); }); _sendBatteryLimitSettings(); }),
-          const Divider(height: 24),
-          _batteryLimitRangeRow(title: '9V', subtitle: '≈ $midLow–$midHigh°C  •  Around  •  LOCKED', low: midLow, high: midHigh),
-          const Divider(height: 24),
-          _batteryLimitRow(title: '12V', subtitle: '> $limitBat12v°C  •  Above', value: limitBat12v, enabled: isConnected, onMinus: () { if (!isConnected) return; final next = (limitBat12v - 1).clamp(22, 50).toInt(); if (next <= limitBat5v + 1) return; setState(() { limitBat12v = next; _normalizeBatteryLimits(changed: 12); }); _sendBatteryLimitSettings(); }, onPlus: () { if (!isConnected) return; final next = (limitBat12v + 1).clamp(22, 50).toInt(); setState(() { limitBat12v = next; _normalizeBatteryLimits(changed: 12); }); _sendBatteryLimitSettings(); }),
-          const SizedBox(height: 10),
-          const Text('Adjustable range: 20°C–50°C  •  9V range is derived automatically', textAlign: TextAlign.center, style: TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700)),
-        ])),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(style: OutlinedButton.styleFrom(foregroundColor: Colors.redAccent, side: const BorderSide(color: Color(0x33FF5252)), padding: const EdgeInsets.symmetric(vertical: 13), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))), onPressed: isConnected ? resetTempSettings : null, icon: const Icon(Icons.restart_alt_rounded), label: const Text('Reset to Defaults', style: TextStyle(fontWeight: FontWeight.w800))),
+        _sectionTitle(
+          'Temperature',
+          subtitle: 'Protection limits are applied by the ESP32 in real time.',
+        ),
+        _premiumCard(
+          padding: const EdgeInsets.fromLTRB(13, 10, 13, 10),
+          child: _tempAdjusterTile(
+            'Hotside Overheat Limit',
+            limitHot,
+            (v) {
+              if (!isConnected) return;
+              final next = v.clamp(30, 60).toInt();
+              if (next == limitHot) return;
+              setState(() => limitHot = next);
+              sendCommand('LHT:$next', showError: false);
+            },
+            '°C',
+            30,
+            60,
+          ),
+        ),
+        _sectionTitle(
+          'Battery Protection',
+          subtitle: '9V is automatically centered between the 5V and 12V thresholds.',
+        ),
+        _premiumCard(
+          padding: const EdgeInsets.fromLTRB(13, 7, 13, 7),
+          child: Column(
+            children: [
+              _batteryLimitRow(
+                title: '5V',
+                subtitle: '< $limitBat5v°C  •  Below',
+                value: limitBat5v,
+                enabled: isConnected,
+                onMinus: () {
+                  if (!isConnected) return;
+                  setState(() {
+                    limitBat5v =
+                        (limitBat5v - 1).clamp(20, 48).toInt();
+                    _normalizeBatteryLimits(changed: 5);
+                  });
+                  _sendBatteryLimitSettings();
+                },
+                onPlus: () {
+                  if (!isConnected) return;
+                  final next =
+                      (limitBat5v + 1).clamp(20, 48).toInt();
+                  if (next >= limitBat12v - 1) return;
+                  setState(() {
+                    limitBat5v = next;
+                    _normalizeBatteryLimits(changed: 5);
+                  });
+                  _sendBatteryLimitSettings();
+                },
+              ),
+              const Divider(height: 18),
+              _batteryLimitRangeRow(
+                title: '9V',
+                subtitle: '≈ $midLow–$midHigh°C  •  Around  •  LOCKED',
+                low: midLow,
+                high: midHigh,
+              ),
+              const Divider(height: 18),
+              _batteryLimitRow(
+                title: '12V',
+                subtitle: '> $limitBat12v°C  •  Above',
+                value: limitBat12v,
+                enabled: isConnected,
+                onMinus: () {
+                  if (!isConnected) return;
+                  final next =
+                      (limitBat12v - 1).clamp(22, 50).toInt();
+                  if (next <= limitBat5v + 1) return;
+                  setState(() {
+                    limitBat12v = next;
+                    _normalizeBatteryLimits(changed: 12);
+                  });
+                  _sendBatteryLimitSettings();
+                },
+                onPlus: () {
+                  if (!isConnected) return;
+                  final next =
+                      (limitBat12v + 1).clamp(22, 50).toInt();
+                  setState(() {
+                    limitBat12v = next;
+                    _normalizeBatteryLimits(changed: 12);
+                  });
+                  _sendBatteryLimitSettings();
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '20–50°C • 9V range derived automatically',
+                style: const TextStyle(
+                  color: Colors.black45,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.redAccent,
+                side: const BorderSide(color: Color(0x33FF5252)),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(13),
+                ),
+              ),
+              onPressed: isConnected ? resetTempSettings : null,
+              icon: const Icon(
+                Icons.restart_alt_rounded,
+                size: 17,
+              ),
+              label: const Text(
+                'Reset',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 10),
+              ),
+            ),
+          ],
+        ),
       ],
     );
   }
 
   Widget _batteryLimitRangeRow({required String title, required String subtitle, required int low, required int high}) {
     return Row(children: [
-      SizedBox(width: 52, child: Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.black45))),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('≈ $low–$high°C', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)), const SizedBox(height: 2), Text(subtitle, style: const TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700))])),
+      SizedBox(width: 42, child: Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: Colors.black45))),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('≈ $low–$high°C', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)), const SizedBox(height: 2), Text(subtitle, style: const TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700))])),
       const Icon(Icons.lock_outline, size: 19, color: Colors.black26),
     ]);
   }
 
   Widget _batteryLimitRow({required String title, required String subtitle, required int value, required bool enabled, VoidCallback? onMinus, VoidCallback? onPlus}) {
     return Row(children: [
-      SizedBox(width: 52, child: Text(title, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: enabled ? Colors.blueAccent : Colors.black26))),
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('$value°C', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)), const SizedBox(height: 2), Text(subtitle, style: const TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700))])),
+      SizedBox(width: 42, child: Text(title, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: enabled ? Colors.blueAccent : Colors.black26))),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('$value°C', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)), const SizedBox(height: 2), Text(subtitle, style: const TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700))])),
       IconButton(onPressed: enabled ? onMinus : null, icon: const Icon(Icons.remove_circle_outline_rounded), color: Colors.black54),
       IconButton(onPressed: enabled ? onPlus : null, icon: const Icon(Icons.add_circle_outline_rounded), color: Colors.black54),
     ]);
@@ -1461,9 +1894,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _tempAdjusterTile(String label, int value, void Function(int) onChanged, String unit, int minValue, int maxValue) {
     return Row(children: [
-      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14)), const SizedBox(height: 3), Text('Range $minValue–$maxValue$unit', style: const TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700))])),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(label, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)), const SizedBox(height: 3), Text('Range $minValue–$maxValue$unit', style: const TextStyle(color: Colors.black45, fontSize: 10, fontWeight: FontWeight.w700))])),
       IconButton(icon: const Icon(Icons.remove_circle_outline_rounded), color: Colors.black54, onPressed: value <= minValue ? null : () => onChanged(value - 1)),
-      Container(width: 72, padding: const EdgeInsets.symmetric(vertical: 10), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(13), border: Border.all(color: const Color(0xFFE3E3E5))), child: Text('$value$unit', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: Colors.blueAccent))),
+      Container(width: 64, padding: const EdgeInsets.symmetric(vertical: 8), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(13), border: Border.all(color: const Color(0xFFE3E3E5))), child: Text('$value$unit', textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Colors.blueAccent))),
       IconButton(icon: const Icon(Icons.add_circle_outline_rounded), color: Colors.black54, onPressed: value >= maxValue ? null : () => onChanged(value + 1)),
     ]);
   }
