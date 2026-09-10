@@ -28,6 +28,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 void main() async {
@@ -117,14 +118,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   String _incomingBuffer = "";
   static const platformChannel = MethodChannel('horizon_cooler/battery_temp');
+  static const _secureStorage = FlutterSecureStorage();
 
   @override
   void initState() {
     super.initState();
     _initFirebaseSafe();
     _requestPermissions();
-    _fetchBatteryTemperature();
-    _startRealtimeBatteryTempReader();
   }
 
   @override
@@ -512,11 +512,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   builder: (c, snapshot) {
                     final results = snapshot.data ?? [];
                     final horizonDevices = results.where((r) {
-                      final devName = r.device.platformName.isNotEmpty
-                          ? r.device.platformName
-                          : r.advertisementData.advName;
-                      return devName.trim().isNotEmpty &&
-                          devName.toUpperCase().contains('HORIZON');
+                      return r.advertisementData.serviceUuids.any(
+                        (uuid) => uuid.toString().toLowerCase() == serviceUUID.toLowerCase(),
+                      );
                     }).toList();
 
                     if (horizonDevices.isEmpty) {
@@ -616,9 +614,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               _isInitialSync = true;
             });
           }
-          // Give the Android BLE stack and ESP32 a brief settle time after
-          // the connection callback before service discovery/MTU negotiation.
-          await Future<void>.delayed(const Duration(milliseconds: 600));
           if (Platform.isAndroid) {
             try {
               await device.requestMtu(512);
@@ -630,6 +625,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         } else if (state == BluetoothConnectionState.disconnected) {
           await dataSubscription?.cancel();
           dataSubscription = null;
+          _batteryTempTimer?.cancel();
+          _batteryTempTimer = null;
           if (mounted) {
             setState(() {
               isConnected = false;
@@ -721,8 +718,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       });
 
       // Register the notification listener first, then request the initial
-      // state. The firmware can answer SYNC very quickly after the write.
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      // state. The firmware can answer SYNC immediately after the write.
       _syncFrameReceived = false;
       _isInitialSync = true;
 
@@ -782,6 +778,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _isInitialSync = false;
         });
       }
+      _startRealtimeBatteryTempReader();
+      await _fetchBatteryTemperature();
     } catch (e) {
       debugPrint('Discovery Error: $e');
       _showSnackBar('Bluetooth service setup failed', color: Colors.redAccent);
@@ -998,6 +996,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await sendCommand('BR:$raw', showError: false);
   }
 
+  bool _requiresWriteResponse(String cmd) {
+    final upper = cmd.trim().toUpperCase();
+    return upper == 'SYNC' ||
+        upper == 'OTAENTER' ||
+        upper == 'OTAEXIT' ||
+        upper == 'CLOUDOTA' ||
+        upper.startsWith('SSID:') ||
+        upper.startsWith('PASS:') ||
+        upper.startsWith('URL:') ||
+        upper.startsWith('CFG:') ||
+        upper.startsWith('ADAPT:') ||
+        upper.startsWith('TEMPSET:');
+  }
+
   Future<bool> sendCommand(String cmd, {bool showError = true}) {
     final completer = Completer<bool>();
     _commandWriteQueue = _commandWriteQueue.then((_) async {
@@ -1015,8 +1027,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       try {
         final payload = utf8.encode('$cmd\n');
-        final supportsNoResponse = rxChar!.properties.writeWithoutResponse;
-        await rxChar!.write(payload, withoutResponse: supportsNoResponse);
+        final useNoResponse =
+            !_requiresWriteResponse(cmd) &&
+            rxChar!.properties.writeWithoutResponse;
+        await rxChar!.write(payload, withoutResponse: useNoResponse);
         completer.complete(true);
       } catch (e) {
         debugPrint('BLE write failed ($cmd): $e');
@@ -1059,16 +1073,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  void _triggerCloudOTASequence(String ssid, String pass, String fwUrl) async {
+  Future<void> _triggerCloudOTASequence(String ssid, String pass, String fwUrl) async {
     if (!isConnected) return;
+    final url = fwUrl.trim();
+    if (!url.startsWith('https://')) {
+      _showSnackBar('Firmware URL must use HTTPS', color: Colors.redAccent);
+      return;
+    }
     if (!await sendCommand('OTAENTER')) return;
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-    if (!await sendCommand('SSID:$ssid')) return;
-    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!await sendCommand('SSID:${ssid.trim()}')) return;
     if (!await sendCommand('PASS:$pass')) return;
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-    if (!await sendCommand('URL:$fwUrl')) return;
-    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (!await sendCommand('URL:$url')) return;
     await sendCommand('CLOUDOTA');
   }
 
@@ -1939,6 +1954,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
+enum FirmwareCheckStatus {
+  checking,
+  upToDate,
+  updateAvailable,
+  failed,
+}
+
+List<int>? parseFirmwareVersion(String version) {
+  final match = RegExp(r'^V(\d+)(?:\.(\d+))?$')
+      .firstMatch(version.trim().toUpperCase());
+  if (match == null) return null;
+  final major = int.tryParse(match.group(1)!);
+  final minor = int.tryParse(match.group(2) ?? '0');
+  if (major == null || minor == null) return null;
+  return <int>[major, minor];
+}
+
+bool isNewerFirmwareVersion(String latest, String current) {
+  final a = parseFirmwareVersion(latest);
+  final b = parseFirmwareVersion(current);
+  if (a == null || b == null) return false;
+  if (a[0] != b[0]) return a[0] > b[0];
+  return a[1] > b[1];
+}
+
 class FirmwareUpdateDialog extends StatefulWidget {
   final String currentVersion;
   final DatabaseReference? dbRef;
@@ -1956,7 +1996,7 @@ class FirmwareUpdateDialog extends StatefulWidget {
 }
 
 class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
-  bool isChecking = true;
+  FirmwareCheckStatus checkStatus = FirmwareCheckStatus.checking;
   String latestVersion = "";
   String fwUrl = "";
   bool hasUpdate = false;
@@ -1987,56 +2027,47 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
   }
 
   Future<void> _loadSavedCredentials() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    if (mounted) {
-      setState(() {
-        ssidCtrl.text = prefs.getString("saved_ssid") ?? "";
-        passCtrl.text = prefs.getString("saved_pass") ?? "";
-      });
+    try {
+      var ssid = await _secureStorage.read(key: 'saved_ssid') ?? '';
+      var pass = await _secureStorage.read(key: 'saved_pass') ?? '';
+
+      if (ssid.isEmpty && pass.isEmpty) {
+        final legacy = await SharedPreferences.getInstance();
+        ssid = legacy.getString('saved_ssid') ?? '';
+        pass = legacy.getString('saved_pass') ?? '';
+        if (ssid.isNotEmpty || pass.isNotEmpty) {
+          await _secureStorage.write(key: 'saved_ssid', value: ssid);
+          await _secureStorage.write(key: 'saved_pass', value: pass);
+          await legacy.remove('saved_ssid');
+          await legacy.remove('saved_pass');
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          ssidCtrl.text = ssid;
+          passCtrl.text = pass;
+        });
+      }
+    } catch (e) {
+      debugPrint('Secure credential load error: $e');
     }
-  }
-
-  List<int>? _parseFirmwareVersion(String version) {
-    final match = RegExp(
-      r'^V(\d+)(?:\.(\d+))?$',
-    ).firstMatch(version.trim().toUpperCase());
-
-    if (match == null) {
-      return null;
-    }
-
-    final major = int.tryParse(match.group(1)!);
-    final minor = int.tryParse(match.group(2) ?? '0');
-
-    if (major == null || minor == null) {
-      return null;
-    }
-
-    return <int>[major, minor];
-  }
-
-  bool _isNewerFirmwareVersion(String latest, String current) {
-    final latestParts = _parseFirmwareVersion(latest);
-    final currentParts = _parseFirmwareVersion(current);
-
-    if (latestParts == null || currentParts == null) {
-      return false;
-    }
-
-    if (latestParts[0] != currentParts[0]) {
-      return latestParts[0] > currentParts[0];
-    }
-
-    return latestParts[1] > currentParts[1];
   }
 
   Future<void> _checkFirebaseForUpdate() async {
+    if (mounted) {
+      setState(() {
+        checkStatus = FirmwareCheckStatus.checking;
+        hasUpdate = false;
+        latestVersion = "";
+        fwUrl = "";
+      });
+    }
+
     if (widget.dbRef == null) {
       if (mounted) {
         setState(() {
-          isChecking = false;
-          latestVersion = widget.currentVersion;
-          hasUpdate = false;
+          checkStatus = FirmwareCheckStatus.failed;
         });
       }
       return;
@@ -2044,33 +2075,37 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
 
     try {
       final snapshot = await widget.dbRef!.child("firmware_update").get();
-      if (snapshot.exists && snapshot.value != null) {
-        final raw = snapshot.value;
-        if (raw is Map) {
-          final data = Map<String, dynamic>.from(raw);
-          latestVersion = data['version']?.toString() ?? widget.currentVersion;
-          fwUrl = data['url']?.toString() ?? '';
-        } else {
-          latestVersion = widget.currentVersion;
-        }
-      } else {
-        latestVersion = widget.currentVersion;
+      if (!snapshot.exists || snapshot.value is! Map) {
+        throw StateError('Missing firmware metadata');
       }
-    } catch (e) {
-      latestVersion = widget.currentVersion;
-    }
 
-    if (mounted) {
+      final data = Map<String, dynamic>.from(snapshot.value as Map);
+      final candidateVersion = data['version']?.toString().trim() ?? '';
+      final candidateUrl = data['url']?.toString().trim() ?? '';
+
+      if (parseFirmwareVersion(candidateVersion) == null ||
+          !candidateUrl.startsWith('https://')) {
+        throw StateError('Invalid firmware metadata');
+      }
+
+      if (!mounted) return;
       setState(() {
-        isChecking = false;
-        hasUpdate = (widget.currentVersion != 'V?' &&
-            latestVersion.isNotEmpty &&
-            fwUrl.isNotEmpty &&
-            _isNewerFirmwareVersion(
-              latestVersion,
-              widget.currentVersion,
-            ));
+        latestVersion = candidateVersion;
+        fwUrl = candidateUrl;
+        hasUpdate = widget.currentVersion != 'V?' &&
+            isNewerFirmwareVersion(candidateVersion, widget.currentVersion);
+        checkStatus = hasUpdate
+            ? FirmwareCheckStatus.updateAvailable
+            : FirmwareCheckStatus.upToDate;
       });
+    } catch (e) {
+      debugPrint('Firebase firmware check error: $e');
+      if (mounted) {
+        setState(() {
+          checkStatus = FirmwareCheckStatus.failed;
+          hasUpdate = false;
+        });
+      }
     }
   }
 
@@ -2080,7 +2115,7 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
       backgroundColor: const Color(0xFF1E202B),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       title: const Text("Firmware Settings", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-      content: isChecking
+      content: checkStatus == FirmwareCheckStatus.checking
           ? const SizedBox(
               height: 100,
               child: Center(child: CircularProgressIndicator(color: Colors.blueAccent)),
@@ -2093,12 +2128,24 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
                 const SizedBox(height: 8),
                 Text("Latest Firmware: $latestVersion", style: const TextStyle(color: Colors.white70)),
                 const SizedBox(height: 20),
-                if (!hasUpdate)
+                if (checkStatus == FirmwareCheckStatus.failed)
                   Center(
                     child: Text(
-                      widget.currentVersion == "V?" 
-                          ? "Synchronizing Device Version..." 
-                          : "System is Up to Date", 
+                      "Unable to check for firmware updates",
+                      style: const TextStyle(
+                        color: Colors.redAccent,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                else if (!hasUpdate)
+                  Center(
+                    child: Text(
+                      widget.currentVersion == "V?"
+                          ? "Synchronizing Device Version..."
+                          : "System is Up to Date",
                       style: TextStyle(
                         color: widget.currentVersion == "V?" ? Colors.orangeAccent : Colors.greenAccent, 
                         fontWeight: FontWeight.bold, 
@@ -2138,13 +2185,24 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text("Close", style: TextStyle(color: Colors.grey)),
         ),
-        if (hasUpdate && !isChecking)
+        if (checkStatus == FirmwareCheckStatus.failed)
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+            onPressed: _checkFirebaseForUpdate,
+            child: const Text("Retry", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          )
+        else if (hasUpdate && checkStatus == FirmwareCheckStatus.updateAvailable)
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
             onPressed: () async {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setString('saved_ssid', ssidCtrl.text.trim());
-              await prefs.setString('saved_pass', passCtrl.text);
+              await _secureStorage.write(
+                key: 'saved_ssid',
+                value: ssidCtrl.text.trim(),
+              );
+              await _secureStorage.write(
+                key: 'saved_pass',
+                value: passCtrl.text,
+              );
 
               if (!context.mounted) return;
               widget.onUpdateTriggered(ssidCtrl.text, passCtrl.text, fwUrl);
