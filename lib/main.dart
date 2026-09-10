@@ -107,6 +107,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double phoneBatteryTemp = -1.0;
   bool phoneBatteryTempAvailable = false; 
   Timer? _batteryTempTimer;
+  Timer? _voltageCooldownTimer;
+  bool _voltageCooldownActive = false;
   int aiModeType = 0;
 
   int limitHot = 45;
@@ -132,6 +134,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     dataSubscription?.cancel();
     targetDevice?.disconnect();
     _batteryTempTimer?.cancel();
+    _voltageCooldownTimer?.cancel();
     super.dispose();
   }
 
@@ -626,6 +629,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           dataSubscription = null;
           _batteryTempTimer?.cancel();
           _batteryTempTimer = null;
+          _voltageCooldownTimer?.cancel();
+          _voltageCooldownTimer = null;
+          _voltageCooldownActive = false;
           if (mounted) {
             setState(() {
               isConnected = false;
@@ -1335,6 +1341,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  Future<void> _selectVoltage(String value) async {
+    if (!isConnected || isAiModeOn || _voltageCooldownActive) {
+      return;
+    }
+
+    _startVoltageCooldown();
+    final success = await sendCommand(value, showError: false);
+    if (!success) {
+      _cancelVoltageCooldown();
+    }
+  }
+
+  void _startVoltageCooldown() {
+    _voltageCooldownTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _voltageCooldownActive = true;
+    });
+    _voltageCooldownTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      setState(() {
+        _voltageCooldownActive = false;
+      });
+      _voltageCooldownTimer = null;
+    });
+  }
+
+  void _cancelVoltageCooldown() {
+    _voltageCooldownTimer?.cancel();
+    _voltageCooldownTimer = null;
+    if (!mounted) return;
+    setState(() {
+      _voltageCooldownActive = false;
+    });
+  }
+
   Widget _voltageRow(
     String value,
     String mode,
@@ -1342,13 +1384,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     bool isLast = false,
   }) {
     final isActive = voltage == value;
+    final voltageLocked = locked || _voltageCooldownActive;
     return Column(
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(15),
-          onTap: !isConnected || locked
+          onTap: !isConnected || voltageLocked
               ? null
-              : () => sendCommand(value, showError: false),
+              : () => _selectVoltage(value),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
             padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
@@ -1397,13 +1440,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                   ),
                 ),
-                if (locked)
+                if (voltageLocked)
                   const Icon(
                     Icons.lock_outline,
                     size: 17,
                     color: Colors.black38,
                   ),
-                if (isActive && !locked)
+                if (isActive && !voltageLocked)
                   const Icon(
                     Icons.check_circle,
                     size: 20,
