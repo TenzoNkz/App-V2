@@ -1163,7 +1163,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   flex: 6,
                   child: Transform.translate(
                     offset: const Offset(-25, -8),
-                    child: Transform.scale(scale: 1.35, child: Image.asset('assets/cooler.png', fit: BoxFit.contain, height: 250)),
+                    child: Transform.scale(scale: 1.35, child: Image.asset('assets/hzcooler.png', fit: BoxFit.contain, height: 250)),
                   ),
                 ),
               ],
