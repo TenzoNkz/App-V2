@@ -1235,13 +1235,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildMenuContent() {
-    switch (selectedMenuIndex) {
-      case 0: return _buildVoltageMenu();
-      case 1: return _buildAiMenu();
-      case 2: return _buildRgbMenu();
-      case 3: return _buildTempSettingMenu();
-      default: return const SizedBox.shrink();
-    }
+    final content = switch (selectedMenuIndex) {
+      0 => _buildVoltageMenu(),
+      1 => _buildAiMenu(),
+      2 => _buildRgbMenu(),
+      3 => _buildTempSettingMenu(),
+      _ => const SizedBox.shrink(),
+    };
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (!constraints.hasBoundedWidth || !constraints.hasBoundedHeight) {
+          return content;
+        }
+
+        // Keep the DISPLAY panel fixed and non-scrollable while allowing
+        // the submenu to scale down on compact test/small-screen layouts.
+        // On normal phone sizes the content remains at its natural size.
+        return ClipRect(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.topCenter,
+            child: SizedBox(
+              width: constraints.maxWidth,
+              child: content,
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _premiumCard({required Widget child, EdgeInsetsGeometry? padding}) {
