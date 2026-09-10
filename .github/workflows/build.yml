@@ -52,6 +52,44 @@ jobs:
             gradle wrapper --gradle-version 9.3.1 --distribution-type bin
           fi
 
+      - name: Architecture regression audit
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path("lib/main.dart").read_text(encoding="utf-8")
+
+          required = [
+              "Firebase.initializeApp()",
+              "FirebaseDatabase.instanceFor",
+              'child("firmware_update").get()',
+              "onChangeEnd",
+          ]
+          for token in required:
+              if token not in source:
+                  raise SystemExit(f"ARCHITECTURE AUDIT FAILED: missing {token}")
+
+          forbidden = [
+              r"telemetry/",
+              r"_firmwareDbRef\s*!?\.update\s*\(",
+              r"_firmwareDbRef\s*!?\.set\s*\(",
+              r"_firmwareDbRef\s*!?\.push\s*\(",
+              r"_firmwareDbRef\s*!?\.removeValue\s*\(",
+              r"DatabaseEvent",
+              r"_firebaseConnectionSubscription",
+          ]
+          for pattern in forbidden:
+              if re.search(pattern, source):
+                  raise SystemExit(f"ARCHITECTURE AUDIT FAILED: forbidden Firebase/runtime pattern: {pattern}")
+
+          if not re.search(r"onChangeEnd\s*:\s*isConnected", source):
+              raise SystemExit("ARCHITECTURE AUDIT FAILED: brightness commit-on-release contract missing")
+
+          print("Architecture audit passed: Firebase is metadata read-only and brightness remains commit-on-release.")
+          PY
+
       - name: Install dependencies
         run: flutter pub get
 
