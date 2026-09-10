@@ -118,7 +118,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   String _incomingBuffer = "";
   static const platformChannel = MethodChannel('horizon_cooler/battery_temp');
-  static const _secureStorage = FlutterSecureStorage();
 
   @override
   void initState() {
@@ -2003,6 +2002,8 @@ class _FirmwareUpdateDialogState extends State<FirmwareUpdateDialog> {
 
   final TextEditingController ssidCtrl = TextEditingController();
   final TextEditingController passCtrl = TextEditingController();
+
+  static const _secureStorage = FlutterSecureStorage();
 
   @override
   void initState() {
