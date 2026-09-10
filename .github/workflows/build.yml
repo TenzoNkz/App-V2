@@ -52,6 +52,24 @@ jobs:
             gradle wrapper --gradle-version 9.3.1 --distribution-type bin
           fi
 
+      - name: Prepare optional production signing
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/signing"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/signing/horizon-release.p12"
+          {
+            echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/signing/horizon-release.p12"
+            echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
+            echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+            echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
       - name: Architecture regression audit
         shell: bash
         run: |
@@ -66,6 +84,7 @@ jobs:
               "FirebaseDatabase.instanceFor",
               'child("firmware_update").get()',
               "onChangeEnd",
+              "flutter_secure_storage",
           ]
           for token in required:
               if token not in source:
@@ -84,10 +103,16 @@ jobs:
               if re.search(pattern, source):
                   raise SystemExit(f"ARCHITECTURE AUDIT FAILED: forbidden Firebase/runtime pattern: {pattern}")
 
+          if not re.search(r"serviceUuids", source):
+              raise SystemExit("ARCHITECTURE AUDIT FAILED: BLE service UUID discovery missing")
           if not re.search(r"onChangeEnd\s*:\s*isConnected", source):
               raise SystemExit("ARCHITECTURE AUDIT FAILED: brightness commit-on-release contract missing")
+          if "setString('saved_pass'" in source or 'setString("saved_pass"' in source:
+              raise SystemExit("ARCHITECTURE AUDIT FAILED: WiFi password still stored in SharedPreferences")
+          if "obscureText: false" not in source:
+              raise SystemExit("ARCHITECTURE AUDIT FAILED: WiFi password visibility contract changed")
 
-          print("Architecture audit passed: Firebase is metadata read-only and brightness remains commit-on-release.")
+          print("Architecture audit passed.")
           PY
 
       - name: Install dependencies
@@ -100,10 +125,16 @@ jobs:
         run: flutter test
 
       - name: Build release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --obfuscate --split-debug-info=build/symbols
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Horizon-Cooler-Release-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload Dart symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: Horizon-Cooler-Dart-Symbols
+          path: build/symbols
