@@ -1,3 +1,24 @@
+/*
+  HORIZON COOLER DEVELOPMENT LAW — APP
+
+  1. GitHub main is the source of truth; never rely on stale local copies.
+  2. Make the smallest safe change that solves the requirement.
+  3. Preserve existing BLE protocol, safety state, OTA flow, and UI behavior unless
+     the requirement explicitly changes them.
+  4. Firebase RTDB is READ-ONLY for firmware metadata. The app must never write
+     daily cooler telemetry, runtime state, or temperature history to Firebase.
+  5. Firebase access is limited to firmware_update version/URL lookup.
+  6. Sensor display values and protection thresholds are different concepts; never
+     clamp a displayed sensor value merely because a setting has a limit.
+  7. UI controls must reflect the actual device state; previews must not be mistaken
+     for committed hardware state.
+  8. Any command path that can race or queue must remain bounded and failure-safe.
+  9. Before release: run flutter analyze, flutter test, and flutter build; do not
+     claim success without CI evidence.
+ 10. Every change must include a regression review for BLE, SYNC, RGB, brightness,
+     temperature settings, OTA, Firebase read-only behavior, and compact layouts.
+*/
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -58,8 +79,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   
   StreamSubscription<BluetoothConnectionState>? connectionSubscription;
   StreamSubscription<List<int>>? dataSubscription;
-  StreamSubscription<DatabaseEvent>? _firebaseConnectionSubscription;
-
   bool _connectionEverEstablished = false;
   Future<void> _commandWriteQueue = Future<void>.value();
   bool _syncFrameReceived = false;
@@ -80,12 +99,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String currentVersion = "V?";
   int rgbModeIndex = 0;
   
-  bool isCloudSyncing = false;
-  DatabaseReference? _dbRef;
+  DatabaseReference? _firmwareDbRef;
   final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
-
-  String? _lastFirebaseBatteryTemp;
-  bool? _lastFirebaseBatteryTempAvailable;
 
   int selectedMenuIndex = 0; 
   double phoneBatteryTemp = -1.0;
@@ -118,52 +133,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     dataSubscription?.cancel();
     targetDevice?.disconnect();
     _batteryTempTimer?.cancel();
-    _firebaseConnectionSubscription?.cancel();
     super.dispose();
   }
 
   void _initFirebaseSafe() {
     try {
-      _dbRef = FirebaseDatabase.instanceFor(
+      _firmwareDbRef = FirebaseDatabase.instanceFor(
         app: Firebase.app(), 
         databaseURL: firebaseDbUrl
       ).ref();
-      _initFirebaseMonitoring();
     } catch (e) {
       debugPrint("Firebase Database Unavailable: $e");
-    }
-  }
-
-  Future<void> _syncBatteryTelemetryToFirebase({
-    required bool available,
-    String? temperature,
-  }) async {
-    if (!isCloudSyncing || _dbRef == null) {
-      return;
-    }
-
-    if (available &&
-        _lastFirebaseBatteryTemp == temperature &&
-        _lastFirebaseBatteryTempAvailable == true) {
-      return;
-    }
-
-    if (!available &&
-        _lastFirebaseBatteryTempAvailable == false) {
-      return;
-    }
-
-    final update = <String, Object?>{
-      'telemetry/battery_temp_available': available,
-      'telemetry/battery_temp': available ? temperature : null,
-    };
-
-    try {
-      await _dbRef!.update(update);
-      _lastFirebaseBatteryTemp = available ? temperature : null;
-      _lastFirebaseBatteryTempAvailable = available;
-    } catch (e) {
-      debugPrint('Firebase battery telemetry error: $e');
     }
   }
 
@@ -207,10 +187,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           );
         }
 
-        await _syncBatteryTelemetryToFirebase(
-          available: true,
-          temperature: nativeTemp.toStringAsFixed(1),
-        );
       } else {
         if (phoneBatteryTempAvailable) {
           setState(() {
@@ -223,9 +199,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           await sendCommand('PHONE:BT=-10.0', showError: false);
         }
 
-        await _syncBatteryTelemetryToFirebase(
-          available: false,
-        );
       }
     } catch (e) {
       debugPrint('Direct battery fetch error: $e');
@@ -368,26 +341,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } catch (_) {
       return false;
     }
-  }
-
-  void _initFirebaseMonitoring() {
-    if (_dbRef == null) return;
-    _firebaseConnectionSubscription?.cancel();
-    _firebaseConnectionSubscription =
-        _dbRef!.child('.info/connected').onValue.listen((event) {
-      if (!mounted) return;
-
-      final next = event.snapshot.value == true;
-
-      if (!next) {
-        _lastFirebaseBatteryTemp = null;
-        _lastFirebaseBatteryTempAvailable = null;
-      }
-
-      setState(() {
-        isCloudSyncing = next;
-      });
-    });
   }
 
   void _showSnackBar(String message, {Color color = Colors.blueAccent}) {
@@ -938,12 +891,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       hotsideTemp = parsedTemp == null || parsedTemp >= 998.0
           ? "ERR"
           : parsedTemp.toStringAsFixed(1);
-      if (isCloudSyncing && _dbRef != null) {
-        _dbRef!.child("telemetry/hotside_temp").set(hotsideTemp);
-      }
     } else if (key == "VOL") {
       voltage = value;
-      if (isCloudSyncing && _dbRef != null) _dbRef!.child("telemetry/voltage").set(voltage);
     } else if (key == "RGB") {
       isRgbOn = (value == "1");
     } else if (key == "AI") {
@@ -1025,13 +974,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       showError: false,
     );
 
-    if (isCloudSyncing && _dbRef != null) {
-      await _dbRef!.child('settings/limit_hot').set(limitHot);
-      await _dbRef!.child('settings/limit_bat_5v').set(limitBat5v);
-      await _dbRef!.child('settings/limit_bat_9v_min').set(limitBat9vMin);
-      await _dbRef!.child('settings/limit_bat_9v_max').set(limitBat9vMax);
-      await _dbRef!.child('settings/limit_bat_12v').set(limitBat12v);
-    }
   }
 
   void _previewBrightness(double value) {
@@ -1107,7 +1049,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (context) {
         return FirmwareUpdateDialog(
           currentVersion: currentVersion,
-          dbRef: _dbRef,
+          dbRef: _firmwareDbRef,
           onUpdateTriggered: (ssid, pass, url) {
             _showSnackBar("Firmware Update Initiated!", color: Colors.purpleAccent);
             _triggerCloudOTASequence(ssid, pass, url);
