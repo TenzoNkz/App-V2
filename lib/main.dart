@@ -1422,13 +1422,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     bool isLast = false,
   }) {
     final isActive = voltage == value;
-    final voltageLocked =
+    final voltageInteractionLocked =
         locked || _voltageCooldownActive || _voltageTransitionBusy;
     return Column(
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(15),
-          onTap: !isConnected || voltageLocked
+          onTap: !isConnected || voltageInteractionLocked
               ? null
               : () => _selectVoltage(value),
           child: AnimatedContainer(
@@ -1479,13 +1479,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                   ),
                 ),
-                if (voltageLocked)
+                // The lock icon indicates Adaptive mode only.
+                // A voltage cooldown blocks switching but must not show a lock.
+                if (locked)
                   const Icon(
                     Icons.lock_outline,
                     size: 17,
                     color: Colors.black38,
                   ),
-                if (isActive && !voltageLocked)
+                if (isActive && !locked)
                   const Icon(
                     Icons.check_circle,
                     size: 20,
