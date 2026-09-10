@@ -32,6 +32,6 @@ void main() {
     expect(isVoltageCommand(' 12V '), isTrue);
     expect(isVoltageCommand('13V'), isFalse);
     expect(isVoltageCommand('BR:128'), isFalse);
-    expect(voltageCooldownDuration, const Duration(seconds: 2));
+    expect(voltageCooldownDuration, const Duration(seconds: 1));
   });
 }
