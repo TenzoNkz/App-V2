@@ -88,9 +88,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool isConnected = false;
 
-  final String serviceUUID = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"; 
-  final String charRxUUID  = "b2c3d4e5-f6a7-4b5c-8d9e-1f2a3b4c5d6e"; 
-  final String charTxUUID  = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
+  static const String serviceUUID = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d";
+  static const String charRxUUID = "b2c3d4e5-f6a7-4b5c-8d9e-1f2a3b4c5d6e";
+  static const String charTxUUID = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
 
   String hotsideTemp = "--"; 
   String voltage = "5V";
@@ -101,7 +101,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int rgbModeIndex = 0;
   
   DatabaseReference? _firmwareDbRef;
-  final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
+  static const String firebaseDbUrl =
+      "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
   int selectedMenuIndex = 0; 
   double phoneBatteryTemp = -1.0;
@@ -632,6 +633,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _voltageCooldownTimer?.cancel();
           _voltageCooldownTimer = null;
           _voltageCooldownActive = false;
+          _voltageTransitionBusy = false;
           if (mounted) {
             setState(() {
               isConnected = false;
@@ -1003,7 +1005,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool _requiresWriteResponse(String cmd) {
     final upper = cmd.trim().toUpperCase();
-    return upper == 'SYNC' ||
+    return isVoltageCommand(upper) ||
+        upper == 'SYNC' ||
         upper == 'OTAENTER' ||
         upper == 'OTAEXIT' ||
         upper == 'CLOUDOTA' ||
@@ -1342,38 +1345,56 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _selectVoltage(String value) async {
-    if (!isConnected || isAiModeOn || _voltageCooldownActive) {
+    if (!isConnected ||
+        isAiModeOn ||
+        _voltageCooldownActive ||
+        _voltageTransitionBusy ||
+        !isVoltageCommand(value)) {
       return;
     }
 
+    // The two-second guard starts at the moment the user first presses the
+    // voltage button, not after the ESP32 executes the transition.
     _startVoltageCooldown();
+
+    if (mounted) {
+      setState(() {
+        _voltageTransitionBusy = true;
+      });
+    }
+
     final success = await sendCommand(value, showError: false);
+
+    if (!mounted) return;
+
+    setState(() {
+      _voltageTransitionBusy = false;
+    });
+
     if (!success) {
       _cancelVoltageCooldown();
+      _showSnackBar(
+        'Voltage command failed',
+        color: Colors.redAccent,
+      );
     }
   }
 
   void _startVoltageCooldown() {
     _voltageCooldownTimer?.cancel();
     if (!mounted) return;
+
     setState(() {
+      _voltageTransitionBusy = false;
       _voltageCooldownActive = true;
     });
-    _voltageCooldownTimer = Timer(const Duration(seconds: 2), () {
+
+    _voltageCooldownTimer = Timer(voltageCooldownDuration, () {
       if (!mounted) return;
       setState(() {
         _voltageCooldownActive = false;
       });
       _voltageCooldownTimer = null;
-    });
-  }
-
-  void _cancelVoltageCooldown() {
-    _voltageCooldownTimer?.cancel();
-    _voltageCooldownTimer = null;
-    if (!mounted) return;
-    setState(() {
-      _voltageCooldownActive = false;
     });
   }
 
@@ -1384,7 +1405,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     bool isLast = false,
   }) {
     final isActive = voltage == value;
-    final voltageLocked = locked || _voltageCooldownActive;
+    final voltageLocked =
+        locked || _voltageCooldownActive || _voltageTransitionBusy;
     return Column(
       children: [
         InkWell(
@@ -1994,6 +2016,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       IconButton(icon: const Icon(Icons.add_circle_outline_rounded), color: Colors.black54, onPressed: value >= maxValue ? null : () => onChanged(value + 1)),
     ]);
   }
+}
+
+const Duration voltageCooldownDuration = Duration(seconds: 2);
+
+bool isVoltageCommand(String cmd) {
+  final upper = cmd.trim().toUpperCase();
+  return upper == '5V' || upper == '9V' || upper == '12V';
 }
 
 enum FirmwareCheckStatus {
