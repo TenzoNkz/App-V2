@@ -66,9 +66,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _isInitialSync = false;
   bool _isBatteryReadBusy = false;
 
-  int? _pendingBrightnessRaw;
-  bool _brightnessCommandSending = false;
-  
   bool isConnected = false;
 
   final String serviceUUID = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"; 
@@ -80,7 +77,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool isRgbOn = true;
   bool isAiModeOn = false;
   double brightness = 100;
-  int? _lastCommittedBrightnessRaw;
   String currentVersion = "V?";
   int rgbModeIndex = 0;
   
@@ -827,7 +823,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         'CFG:${configParts.join(';')}',
         showError: false,
       );
-      _lastCommittedBrightnessRaw = brightnessRaw;
       if (mounted) {
         setState(() {
           isConnected = true;
@@ -938,8 +933,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (key == "TMP") {
       final parsedTemp = double.tryParse(value);
+      // The Hotside indicator has no artificial temperature limit.
+      // Sensor faults are represented explicitly instead of being hidden.
       hotsideTemp = parsedTemp == null || parsedTemp >= 998.0
-          ? "--"
+          ? "ERR"
           : parsedTemp.toStringAsFixed(1);
       if (isCloudSyncing && _dbRef != null) {
         _dbRef!.child("telemetry/hotside_temp").set(hotsideTemp);
@@ -970,14 +967,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final b5 = int.tryParse(parts[1]);
         final b12 = int.tryParse(parts[3]);
         if (hot != null && b5 != null && b12 != null) {
-          limitHot = hot;
+          limitHot = hot.clamp(40, 50);
           limitBat5v = b5;
           limitBat12v = b12;
           _normalizeBatteryLimits();
         }
       }
     } else if (key == "LHT") {
-      limitHot = int.tryParse(value) ?? 45;
+      limitHot = (int.tryParse(value) ?? 45).clamp(40, 50).toInt();
     } else if (key == "LB5") {
       limitBat5v = int.tryParse(value) ?? 25;
       _normalizeBatteryLimits();
@@ -994,6 +991,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _normalizeBatteryLimits({int? changed}) {
+    // Hotside value here is an Adaptive protection setting, not a sensor cap.
+    limitHot = limitHot.clamp(40, 50).toInt();
     limitBat5v = limitBat5v.clamp(20, 48).toInt();
     limitBat12v = limitBat12v.clamp(22, 50).toInt();
 
@@ -1035,26 +1034,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  void _queueBrightnessUpdate(double value) {
-    // Update the app preview while dragging, but keep the device command
-    // deferred until the slider is released.
-    setState(() => brightness = value.clamp(1.0, 100.0));
+  void _previewBrightness(double value) {
+    if (!mounted) return;
+    setState(() {
+      brightness = value.clamp(1.0, 100.0).toDouble();
+    });
   }
 
-  Future<void> _commitBrightnessUpdate() async {
+  Future<void> _commitBrightness(double value) async {
+    final clamped = value.clamp(1.0, 100.0).toDouble();
+    if (mounted) {
+      setState(() => brightness = clamped);
+    }
+
     if (!isConnected) {
       return;
     }
 
-    final raw = (brightness / 100.0 * 255.0).round().clamp(1, 255);
-    if (_lastCommittedBrightnessRaw == raw) {
-      return;
-    }
-
-    final success = await sendCommand('BR:$raw', showError: false);
-    if (success) {
-      _lastCommittedBrightnessRaw = raw;
-    }
+    final raw = (clamped / 100.0 * 255.0).round().clamp(1, 255);
+    // Send exactly once, after the user finishes dragging the slider.
+    await sendCommand('BR:$raw', showError: false);
   }
 
   Future<bool> sendCommand(String cmd, {bool showError = true}) {
@@ -1178,7 +1177,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     children: [
                       _buildTopData(isConnected && phoneBatteryTempAvailable ? phoneBatteryTemp.toStringAsFixed(1) : '--', '°C', 'Battery Temperature', color: Colors.orangeAccent),
                       const SizedBox(height: 19),
-                      _buildTopData(isConnected ? hotsideTemp : '--', '°C', 'Hotside Temperature', color: Colors.cyanAccent),
+                      _buildTopData(isConnected ? hotsideTemp : '--', hotsideTemp == 'ERR' ? '' : '°C', 'Hotside Temperature', color: hotsideTemp == 'ERR' ? Colors.redAccent : Colors.cyanAccent),
                       const SizedBox(height: 19),
                       _buildTopData(isConnected ? voltage.replaceAll('V', '') : '--', 'V', 'Voltage Indicator', color: Colors.blueAccent),
                       const SizedBox(height: 19),
@@ -1327,11 +1326,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _premiumCard({required Widget child, EdgeInsetsGeometry? padding}) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.symmetric(vertical: 5),
-      padding: padding ?? const EdgeInsets.all(13),
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: padding ?? const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFFF7F7F8),
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: const Color(0xFFE7E7E9)),
         boxShadow: const [BoxShadow(color: Color(0x12000000), blurRadius: 12, offset: Offset(0, 5))],
       ),
@@ -1778,10 +1777,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       activeColor: Colors.black,
                       inactiveColor: Colors.black12,
                       onChanged: isConnected
-                          ? _queueBrightnessUpdate
+                          ? _previewBrightness
                           : null,
                       onChangeEnd: isConnected
-                          ? (_) => _commitBrightnessUpdate()
+                          ? _commitBrightness
                           : null,
                     ),
                   ),
