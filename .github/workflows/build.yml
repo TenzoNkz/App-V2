@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Java 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: zulu
           java-version: "17"
@@ -29,7 +29,7 @@ jobs:
           cache: true
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "9.3.1"
 
@@ -53,7 +53,6 @@ jobs:
           fi
 
       - name: Prepare optional production signing
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -61,14 +60,26 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "Production Android signing secrets are not configured; using debug signing."
+            exit 0
+          fi
+
           mkdir -p "$RUNNER_TEMP/signing"
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/signing/horizon-release.p12"
+
+          if ! printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/signing/horizon-release.p12"; then
+            echo "ERROR: ANDROID_KEYSTORE_BASE64 is not valid base64."
+            exit 1
+          fi
+
           {
             echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/signing/horizon-release.p12"
             echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD"
             echo "ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS"
             echo "ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
+
+          echo "Production Android signing keystore prepared."
 
       - name: Architecture regression audit
         shell: bash
@@ -111,6 +122,14 @@ jobs:
               raise SystemExit("ARCHITECTURE AUDIT FAILED: WiFi password still stored in SharedPreferences")
           if "obscureText: false" not in source:
               raise SystemExit("ARCHITECTURE AUDIT FAILED: WiFi password visibility contract changed")
+          for token in [
+              "voltageCooldownDuration",
+              "isVoltageCommand",
+              "_voltageTransitionBusy",
+              "isVoltageCommand(upper)",
+          ]:
+              if token not in source:
+                  raise SystemExit(f"ARCHITECTURE AUDIT FAILED: voltage safety invariant missing: {token}")
 
           print("Architecture audit passed.")
           PY
