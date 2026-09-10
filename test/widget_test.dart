@@ -25,4 +25,13 @@ void main() {
     expect(isNewerFirmwareVersion('V2.19', 'V2.20'), isFalse);
     expect(isNewerFirmwareVersion('invalid', 'V2.19'), isFalse);
   });
+
+  test('voltage safety helpers enforce supported levels and cooldown', () {
+    expect(isVoltageCommand('5V'), isTrue);
+    expect(isVoltageCommand('9v'), isTrue);
+    expect(isVoltageCommand(' 12V '), isTrue);
+    expect(isVoltageCommand('13V'), isFalse);
+    expect(isVoltageCommand('BR:128'), isFalse);
+    expect(voltageCooldownDuration, const Duration(seconds: 2));
+  });
 }
