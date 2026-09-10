@@ -377,7 +377,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _dbRef!.child('.info/connected').onValue.listen((event) {
       if (!mounted) return;
 
-      final next = event.snapshot.value is bool && event.snapshot.value;
+      final next = event.snapshot.value == true;
 
       if (!next) {
         _lastFirebaseBatteryTemp = null;
@@ -697,7 +697,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
       });
 
-      await device.connect(autoConnect: false, timeout: const Duration(seconds: 10));
+      await device.connect(
+        license: License.nonprofit,
+        autoConnect: false,
+        timeout: const Duration(seconds: 10),
+      );
     } catch (e) {
       _connectionEverEstablished = false;
       if (mounted) {
