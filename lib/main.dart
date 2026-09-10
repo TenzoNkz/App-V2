@@ -1330,12 +1330,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _sectionTitle('Adaptive Switch', subtitle: 'Automatic voltage control prioritizes overheat protection.'),
         _premiumCard(
           child: Row(children: [
-            Container(width: 46, height: 46, decoration: BoxDecoration(shape: BoxShape.circle, color: isAiModeOn ? Colors.green.withOpacity(0.13) : Colors.black.withOpacity(0.06)), child: Icon(isAiModeOn ? Icons.shield_rounded : Icons.shield_outlined, color: isAiModeOn ? Colors.green.shade700 : Colors.black45)),
+            Container(width: 46, height: 46, decoration: BoxDecoration(shape: BoxShape.circle, color: isAiModeOn ? Colors.green.withValues(alpha: 0.13) : Colors.black.withValues(alpha: 0.06)), child: Icon(isAiModeOn ? Icons.shield_rounded : Icons.shield_outlined, color: isAiModeOn ? Colors.green.shade700 : Colors.black45)),
             const SizedBox(width: 13),
             const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Adaptive Switch', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900)), SizedBox(height: 3), Text('Master control', style: TextStyle(fontSize: 11, color: Colors.black45, fontWeight: FontWeight.w600))])),
             Switch(
               value: isConnected && isAiModeOn,
-              activeColor: Colors.green,
+              activeThumbColor: Colors.green,
               onChanged: isConnected ? (val) async {
                 setState(() => isAiModeOn = val);
                 final parts = <String>['ON=${val ? 1 : 0}', 'MODE=$aiModeType'];
@@ -1385,10 +1385,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _premiumCard(
           child: Column(children: [
             Row(children: [
-              Container(width: 46, height: 46, decoration: BoxDecoration(shape: BoxShape.circle, color: isRgbOn ? Colors.black : Colors.black.withOpacity(0.06)), child: Icon(Icons.lightbulb_rounded, color: isRgbOn ? Colors.white : Colors.black38)),
+              Container(width: 46, height: 46, decoration: BoxDecoration(shape: BoxShape.circle, color: isRgbOn ? Colors.black : Colors.black.withValues(alpha: 0.06)), child: Icon(Icons.lightbulb_rounded, color: isRgbOn ? Colors.white : Colors.black38)),
               const SizedBox(width: 13),
               const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('LED Power', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900)), SizedBox(height: 3), Text('RGB illumination', style: TextStyle(fontSize: 11, color: Colors.black45, fontWeight: FontWeight.w600))])),
-              Switch(value: isConnected && isRgbOn, activeColor: Colors.blueAccent, onChanged: isConnected ? (_) => sendCommand('RGBTOGGLE', showError: false) : null),
+              Switch(value: isConnected && isRgbOn, activeThumbColor: Colors.blueAccent, onChanged: isConnected ? (_) => sendCommand('RGBTOGGLE', showError: false) : null),
             ]),
             const Divider(height: 26),
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
