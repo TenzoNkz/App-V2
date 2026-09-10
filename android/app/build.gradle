@@ -18,11 +18,6 @@ if (flutterVersionCode == null) {
     flutterVersionCode = '2'
 }
 
-def flutterVersionName = localProperties.getProperty('flutter.versionName')
-if (flutterVersionName == null) {
-    flutterVersionName = 'Telegram @horizontalzzz'
-}
-
 android {
     namespace "com.horizontalzzz.horizoncooler"
     compileSdk 37
@@ -47,7 +42,9 @@ android {
         minSdk 24
         targetSdk 36
         versionCode flutterVersionCode.toInteger()
-        versionName flutterVersionName
+
+        // Custom Android app version label shown by the system App Info screen.
+        versionName "Telegram @horizontalzzz"
     }
 
     buildTypes {
