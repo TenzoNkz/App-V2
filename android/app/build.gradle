@@ -1,6 +1,5 @@
 plugins {
     id "com.android.application"
-    id "kotlin-android"
     id "dev.flutter.flutter-gradle-plugin"
     id "com.google.gms.google-services"
 }
@@ -15,27 +14,27 @@ if (localPropertiesFile.exists()) {
 
 def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
 if (flutterVersionCode == null) {
-    flutterVersionCode = '1'
+    flutterVersionCode = '2'
 }
 
 def flutterVersionName = localProperties.getProperty('flutter.versionName')
 if (flutterVersionName == null) {
-    flutterVersionName = '1.0'
+    flutterVersionName = 'Telegram @horizontalzzz'
 }
 
 android {
     namespace "com.horizontalzzz.horizoncooler"
-    
-    // MUTLAK HARUS PAKAI SPASI SEPERTI INI, JANGAN PAKAI (=)
-    compileSdkVersion 34
+    compileSdk 37
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = '1.8'
+    kotlin {
+        compilerOptions {
+            jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+        }
     }
 
     sourceSets {
@@ -44,16 +43,15 @@ android {
 
     defaultConfig {
         applicationId "com.horizontalzzz.horizoncooler"
-        
-        // MUTLAK HARUS PAKAI SPASI
-        minSdkVersion 23
-        targetSdkVersion 34
+        minSdk 24
+        targetSdk 37
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
     }
 
     buildTypes {
         release {
+            // Keep the debug-signing fallback until a production keystore is supplied via CI secrets.
             signingConfig signingConfigs.debug
         }
     }
@@ -62,4 +60,3 @@ android {
 flutter {
     source = "../.."
 }
-
