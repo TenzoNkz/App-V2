@@ -24,7 +24,8 @@
 
     <application
         android:label="Horizon Cooler"
-        android:name="${applicationName}">
+        android:name="${applicationName}"
+        android:icon="@drawable/hzicon">
         <activity
             android:name=".MainActivity"
             android:exported="true"
