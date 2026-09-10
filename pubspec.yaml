@@ -13,6 +13,7 @@ dependencies:
   firebase_core: ^4.14.0
   firebase_database: ^12.5.0
   shared_preferences: ^2.5.5
+  flutter_secure_storage: ^11.0.0
   permission_handler: ^13.0.2
 
 dev_dependencies:
