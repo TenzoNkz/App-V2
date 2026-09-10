@@ -7,6 +7,9 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,22 +23,37 @@ jobs:
         with:
           distribution: zulu
           java-version: "17"
+          cache: gradle
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.24.3"
+          flutter-version: "3.47.2"
           channel: stable
           cache: true
 
-      - name: Verify Flutter project
-        run: flutter doctor -v
+      - name: Set up Gradle 9.6
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: "9.6.0"
 
-      - name: Restore missing Gradle wrapper
+      - name: Verify toolchain
+        run: |
+          flutter --version
+          java -version
+          gradle --version
+
+      - name: Prepare Flutter local.properties
         shell: bash
         run: |
-          if [ ! -f android/gradlew ] || [ ! -f android/gradle/wrapper/gradle-wrapper.jar ]; then
-            flutter create --platforms=android --project-name=horizoncooler --org=com.horizontalzzz --no-pub .
+          printf 'flutter.sdk=%s\n' "$FLUTTER_ROOT" > android/local.properties
+
+      - name: Restore Gradle wrapper if missing
+        working-directory: android
+        shell: bash
+        run: |
+          if [ ! -f gradlew ] || [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            gradle wrapper --gradle-version 9.6.0 --distribution-type bin
           fi
 
       - name: Install dependencies
