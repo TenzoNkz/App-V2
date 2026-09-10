@@ -1,5 +1,6 @@
 plugins {
     id "com.android.application"
+    id "org.jetbrains.kotlin.android"
     id "dev.flutter.flutter-gradle-plugin"
     id "com.google.gms.google-services"
 }
@@ -24,7 +25,7 @@ if (flutterVersionName == null) {
 
 android {
     namespace "com.horizontalzzz.horizoncooler"
-    compileSdk 37
+    compileSdk 36
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -44,7 +45,7 @@ android {
     defaultConfig {
         applicationId "com.horizontalzzz.horizoncooler"
         minSdk 24
-        targetSdk 37
+        targetSdk 36
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
     }
