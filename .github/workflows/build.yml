@@ -35,7 +35,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "8.13"
+          gradle-version: "9.3.1"
 
       - name: Verify toolchain
         run: |
@@ -46,15 +46,14 @@ jobs:
       - name: Prepare Flutter local.properties
         shell: bash
         run: |
-          printf 'flutter.sdk=%s
-' "$FLUTTER_ROOT" > android/local.properties
+          printf 'flutter.sdk=%s\n' "$FLUTTER_ROOT" > android/local.properties
 
       - name: Restore Gradle wrapper if missing
         working-directory: android
         shell: bash
         run: |
           if [ ! -f gradlew ] || [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            gradle wrapper --gradle-version 8.13 --distribution-type bin
+            gradle wrapper --gradle-version 9.3.1 --distribution-type bin
           fi
 
       - name: Install dependencies
