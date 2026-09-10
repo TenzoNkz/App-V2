@@ -1,24 +1,24 @@
 name: horizoncooler
 description: "Horizon Cooler IoT App"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.9.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  flutter_blue_plus: ^1.31.18
-  firebase_core: ^2.32.0
-  firebase_database: ^10.5.0
-  shared_preferences: ^2.2.3
-  permission_handler: ^11.3.1
-  
+  flutter_blue_plus: ^2.3.12
+  firebase_core: ^4.14.0
+  firebase_database: ^12.5.0
+  shared_preferences: ^2.5.5
+  permission_handler: ^13.0.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true
