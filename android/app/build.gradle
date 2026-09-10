@@ -18,6 +18,17 @@ if (flutterVersionCode == null) {
     flutterVersionCode = '2'
 }
 
+def releaseStoreFile = System.getenv('ANDROID_KEYSTORE_FILE')
+def releaseStorePassword = System.getenv('ANDROID_KEYSTORE_PASSWORD')
+def releaseKeyAlias = System.getenv('ANDROID_KEY_ALIAS')
+def releaseKeyPassword = System.getenv('ANDROID_KEY_PASSWORD')
+
+def productionSigningReady = releaseStoreFile &&
+        releaseStorePassword &&
+        releaseKeyAlias &&
+        releaseKeyPassword &&
+        file(releaseStoreFile).exists()
+
 android {
     namespace "com.horizontalzzz.horizoncooler"
     compileSdk 37
@@ -42,15 +53,27 @@ android {
         minSdk 24
         targetSdk 36
         versionCode flutterVersionCode.toInteger()
-
-        // Custom Android app version label shown by the system App Info screen.
         versionName "Telegram @horizontalzzz"
+    }
+
+    signingConfigs {
+        if (productionSigningReady) {
+            release {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
-            // Keep the debug-signing fallback until a production keystore is supplied via CI secrets.
-            signingConfig signingConfigs.debug
+            if (productionSigningReady) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
         }
     }
 }
