@@ -94,6 +94,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _isBatteryReadBusy = false;
   bool _voltageSwitchBusy = false;
   bool _adaptiveSwitchBusy = false;
+  bool _resetNoticeShownForConnection = false;
   Timer? _voltageBusyTimer;
   Timer? _adaptiveBusyTimer;
 
@@ -616,6 +617,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
 
       targetDevice = device;
+      _resetNoticeShownForConnection = false;
       txChar = null;
       rxChar = null;
       _connectionEverEstablished = false;
@@ -796,6 +798,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
           isConnected = true;
           _isInitialSync = false;
         });
+
+        if (resetReason != "POWER_ON" &&
+            resetReason != "UNKNOWN" &&
+            !_resetNoticeShownForConnection) {
+          _resetNoticeShownForConnection = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && isConnected) {
+              _showSnackBar(
+                'ESP32 Restart: ${_friendlyResetReason(resetReason)}',
+                color: Colors.orangeAccent,
+              );
+            }
+          });
+        }
       }
       _startRealtimeBatteryTempReader();
       await _fetchBatteryTemperature();
@@ -934,10 +950,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       currentVersion = value;
     } else if (key == "RESET") {
       resetReason = value.toUpperCase();
-      if (resetReason != "POWER_ON" && resetReason != "UNKNOWN") {
+      if (resetReason != "POWER_ON" &&
+          resetReason != "UNKNOWN" &&
+          isConnected &&
+          !_resetNoticeShownForConnection) {
+        _resetNoticeShownForConnection = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && isConnected) {
-            _showSnackBar('ESP32 Restart: ${_friendlyResetReason(resetReason)}', color: Colors.orangeAccent);
+            _showSnackBar(
+              'ESP32 Restart: ${_friendlyResetReason(resetReason)}',
+              color: Colors.orangeAccent,
+            );
           }
         });
       }
