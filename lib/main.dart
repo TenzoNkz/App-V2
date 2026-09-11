@@ -93,10 +93,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _isInitialSync = false;
   bool _isBatteryReadBusy = false;
   bool _voltageSwitchBusy = false;
-  bool _adaptiveSwitchBusy = false;
+  bool _adaptiveCommandInFlight = false;
   bool _resetNoticeShownForConnection = false;
   Timer? _voltageBusyTimer;
-  Timer? _adaptiveBusyTimer;
 
   bool isConnected = false;
 
@@ -148,7 +147,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     targetDevice?.disconnect();
     _batteryTempTimer?.cancel();
     _voltageBusyTimer?.cancel();
-    _adaptiveBusyTimer?.cancel();
     super.dispose();
   }
 
@@ -232,7 +230,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _startRealtimeBatteryTempReader() {
     _batteryTempTimer?.cancel();
     _voltageBusyTimer?.cancel();
-    _adaptiveBusyTimer?.cancel();
     _batteryTempTimer = Timer.periodic(
       const Duration(milliseconds: 500),
       (_) {
@@ -617,7 +614,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
 
       targetDevice = device;
-      _resetNoticeShownForConnection = false;
       txChar = null;
       rxChar = null;
       _connectionEverEstablished = false;
@@ -626,6 +622,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       connectionSubscription = device.connectionState.listen((state) async {
         if (state == BluetoothConnectionState.connected) {
           _connectionEverEstablished = true;
+          _resetNoticeShownForConnection = false;
           if (mounted) {
             setState(() {
               isConnected = false;
@@ -646,7 +643,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           dataSubscription = null;
           _batteryTempTimer?.cancel();
     _voltageBusyTimer?.cancel();
-    _adaptiveBusyTimer?.cancel();
           _batteryTempTimer = null;
           if (mounted) {
             setState(() {
@@ -798,20 +794,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
           isConnected = true;
           _isInitialSync = false;
         });
-
-        if (resetReason != "POWER_ON" &&
-            resetReason != "UNKNOWN" &&
-            !_resetNoticeShownForConnection) {
-          _resetNoticeShownForConnection = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted && isConnected) {
-              _showSnackBar(
-                'ESP32 Restart: ${_friendlyResetReason(resetReason)}',
-                color: Colors.orangeAccent,
-              );
-            }
-          });
-        }
+      }
+      if (resetReason != 'POWER_ON' &&
+          resetReason != 'UNKNOWN' &&
+          !_resetNoticeShownForConnection) {
+        _resetNoticeShownForConnection = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && isConnected) {
+            _showSnackBar(
+              'ESP32 Restart: ${_friendlyResetReason(resetReason)}',
+              color: Colors.orangeAccent,
+            );
+          }
+        });
       }
       _startRealtimeBatteryTempReader();
       await _fetchBatteryTemperature();
@@ -823,11 +818,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> disconnectDevice() async {
     _voltageBusyTimer?.cancel();
-    _adaptiveBusyTimer?.cancel();
     if (mounted) {
       setState(() {
         _voltageSwitchBusy = false;
-        _adaptiveSwitchBusy = false;
+        _adaptiveCommandInFlight = false;
       });
     }
     try {
@@ -1055,19 +1049,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  void _setAdaptiveBusy(bool value) {
-    _adaptiveBusyTimer?.cancel();
-    if (!mounted) return;
+  Future<void> _setAdaptiveMode(bool enabled) async {
+    if (!isConnected || _adaptiveCommandInFlight) {
+      return;
+    }
+
+    final previous = isAiModeOn;
     setState(() {
-      _adaptiveSwitchBusy = value;
+      isAiModeOn = enabled;
+      _adaptiveCommandInFlight = true;
     });
-    if (value) {
-      _adaptiveBusyTimer = Timer(voltageCooldownDuration, () {
-        if (!mounted) return;
-        setState(() {
-          _adaptiveSwitchBusy = false;
-        });
-      });
+
+    try {
+      // Adaptive ON always begins from 5V when the current manual voltage is
+      // higher. No client-side sleep/delay is inserted here.
+      if (enabled && voltage != '5V') {
+        final returnedToFive = await sendCommand('5V', showError: false);
+        if (!returnedToFive) {
+          if (mounted) setState(() => isAiModeOn = previous);
+          return;
+        }
+      }
+
+      final parts = <String>[
+        'ON=${enabled ? 1 : 0}',
+        'MODE=$aiModeType',
+      ];
+      if (enabled && aiModeType == 1 && phoneBatteryTempAvailable) {
+        parts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
+      }
+
+      // Adaptive OFF is handled atomically by the firmware: it releases
+      // Adaptive control and immediately requests 5V. No client-side delay.
+      final accepted = await sendCommand(
+        'ADAPT:${parts.join(';')}',
+        showError: false,
+      );
+      if (!accepted && mounted) {
+        setState(() => isAiModeOn = previous);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _adaptiveCommandInFlight = false);
+      }
     }
   }
 
@@ -1616,31 +1640,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Switch(
                 value: isConnected && isAiModeOn,
                 activeThumbColor: Colors.green,
-                onChanged: isConnected && !_adaptiveSwitchBusy
-                    ? (val) async {
-                        final previous = isAiModeOn;
-                        setState(() => isAiModeOn = val);
-                        _setAdaptiveBusy(true);
-                        final parts = <String>[
-                          'ON=${val ? 1 : 0}',
-                          'MODE=$aiModeType',
-                        ];
-                        if (val &&
-                            aiModeType == 1 &&
-                            phoneBatteryTempAvailable) {
-                          parts.add(
-                            'BT=${phoneBatteryTemp.toStringAsFixed(1)}',
-                          );
-                        }
-                        final accepted = await sendCommand(
-                          'ADAPT:${parts.join(';')}',
-                          showError: false,
-                        );
-                        if (!accepted && mounted) {
-                          setState(() => isAiModeOn = previous);
-                          _setAdaptiveBusy(false);
-                        }
-                      }
+                onChanged: isConnected && !_adaptiveCommandInFlight
+                    ? _setAdaptiveMode
                     : null,
               ),
             ],
@@ -1680,28 +1681,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
       opacity: locked ? 0.55 : 1.0,
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
-        onTap: !isConnected || locked || _adaptiveSwitchBusy
+        onTap: !isConnected || locked || _adaptiveCommandInFlight
             ? null
             : () async {
                 final previous = aiModeType;
-                setState(() => aiModeType = index);
-                _setAdaptiveBusy(true);
-                final parts = <String>[
-                  'ON=${isAiModeOn ? 1 : 0}',
-                  'MODE=$index',
-                ];
-                if (isAiModeOn && index == 1 && phoneBatteryTempAvailable) {
-                  parts.add(
-                    'BT=${phoneBatteryTemp.toStringAsFixed(1)}',
+                setState(() {
+                  aiModeType = index;
+                  _adaptiveCommandInFlight = true;
+                });
+
+                try {
+                  final parts = <String>[
+                    'ON=${isAiModeOn ? 1 : 0}',
+                    'MODE=$index',
+                  ];
+                  if (isAiModeOn && index == 1 && phoneBatteryTempAvailable) {
+                    parts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
+                  }
+                  final accepted = await sendCommand(
+                    'ADAPT:${parts.join(';')}',
+                    showError: false,
                   );
-                }
-                final accepted = await sendCommand(
-                  'ADAPT:${parts.join(';')}',
-                  showError: false,
-                );
-                if (!accepted && mounted) {
-                  setState(() => aiModeType = previous);
-                  _setAdaptiveBusy(false);
+                  if (!accepted && mounted) {
+                    setState(() => aiModeType = previous);
+                  }
+                } finally {
+                  if (mounted) {
+                    setState(() => _adaptiveCommandInFlight = false);
+                  }
                 }
               },
         child: _premiumCard(
