@@ -85,12 +85,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _syncFrameReceived = false;
   bool _isInitialSync = false;
   bool _isBatteryReadBusy = false;
+  bool _voltageSwitchBusy = false;
+  bool _adaptiveSwitchBusy = false;
+  Timer? _voltageBusyTimer;
+  Timer? _adaptiveBusyTimer;
 
   bool isConnected = false;
 
-  static const String serviceUUID = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d";
-  static const String charRxUUID = "b2c3d4e5-f6a7-4b5c-8d9e-1f2a3b4c5d6e";
-  static const String charTxUUID = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
+  final String serviceUUID = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"; 
+  final String charRxUUID  = "b2c3d4e5-f6a7-4b5c-8d9e-1f2a3b4c5d6e"; 
+  final String charTxUUID  = "c3d4e5f6-a7b8-4c5d-8e9f-2a3b4c5d6e7f";
 
   String hotsideTemp = "--"; 
   String voltage = "5V";
@@ -98,19 +102,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool isAiModeOn = false;
   double brightness = 100;
   String currentVersion = "V?";
+  String resetReason = "UNKNOWN";
   int rgbModeIndex = 0;
   
   DatabaseReference? _firmwareDbRef;
-  static const String firebaseDbUrl =
-      "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
+  final String firebaseDbUrl = "https://horizon-cooler-a4723-default-rtdb.asia-southeast1.firebasedatabase.app";
 
   int selectedMenuIndex = 0; 
   double phoneBatteryTemp = -1.0;
   bool phoneBatteryTempAvailable = false; 
   Timer? _batteryTempTimer;
-  Timer? _voltageCooldownTimer;
-  bool _voltageCooldownActive = false;
-  bool _voltageTransitionBusy = false;
   int aiModeType = 0;
 
   int limitHot = 45;
@@ -136,7 +137,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     dataSubscription?.cancel();
     targetDevice?.disconnect();
     _batteryTempTimer?.cancel();
-    _voltageCooldownTimer?.cancel();
+    _voltageBusyTimer?.cancel();
+    _adaptiveBusyTimer?.cancel();
     super.dispose();
   }
 
@@ -219,6 +221,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _startRealtimeBatteryTempReader() {
     _batteryTempTimer?.cancel();
+    _voltageBusyTimer?.cancel();
+    _adaptiveBusyTimer?.cancel();
     _batteryTempTimer = Timer.periodic(
       const Duration(milliseconds: 500),
       (_) {
@@ -630,11 +634,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           await dataSubscription?.cancel();
           dataSubscription = null;
           _batteryTempTimer?.cancel();
+    _voltageBusyTimer?.cancel();
+    _adaptiveBusyTimer?.cancel();
           _batteryTempTimer = null;
-          _voltageCooldownTimer?.cancel();
-          _voltageCooldownTimer = null;
-          _voltageCooldownActive = false;
-          _voltageTransitionBusy = false;
           if (mounted) {
             setState(() {
               isConnected = false;
@@ -795,6 +797,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> disconnectDevice() async {
+    _voltageBusyTimer?.cancel();
+    _adaptiveBusyTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _voltageSwitchBusy = false;
+        _adaptiveSwitchBusy = false;
+      });
+    }
     try {
       await targetDevice?.disconnect();
     } catch (e) {
@@ -899,6 +909,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           : parsedTemp.toStringAsFixed(1);
     } else if (key == "VOL") {
       voltage = value;
+      if (_voltageSwitchBusy) {
+        _voltageBusyTimer?.cancel();
+        _voltageSwitchBusy = false;
+      }
     } else if (key == "RGB") {
       isRgbOn = (value == "1");
     } else if (key == "AI") {
@@ -913,6 +927,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       brightness = (raw / 255.0 * 100.0).clamp(1.0, 100.0).toDouble();
     } else if (key == "VER") {
       currentVersion = value;
+    } else if (key == "RESET") {
+      resetReason = value.toUpperCase();
+      if (resetReason != "POWER_ON" && resetReason != "UNKNOWN") {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && isConnected) {
+            _showSnackBar('ESP32 Restart: ${_friendlyResetReason(resetReason)}', color: Colors.orangeAccent);
+          }
+        });
+      }
     } else if (key == "MD") {
       rgbModeIndex = (int.tryParse(value) ?? 0);
     } else if (key == "LIM") {
@@ -943,6 +966,69 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return false;
     }
     return true;
+  }
+
+  String _friendlyResetReason(String value) {
+    switch (value.toUpperCase()) {
+      case 'BROWNOUT':
+        return 'Brownout / supply voltage drop';
+      case 'WDT':
+      case 'INT_WDT':
+      case 'TASK_WDT':
+        return 'Watchdog reset';
+      case 'PANIC':
+        return 'Firmware panic';
+      case 'SOFTWARE':
+        return 'Software reset';
+      case 'EXTERNAL':
+        return 'External reset';
+      case 'DEEPSLEEP':
+        return 'Deep sleep reset';
+      case 'SDIO':
+        return 'SDIO reset';
+      case 'POWER_ON':
+        return 'Power-on';
+      default:
+        return value;
+    }
+  }
+
+  void _setVoltageBusy(String target) {
+    _voltageBusyTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _voltageSwitchBusy = true;
+    });
+    _voltageBusyTimer = Timer(const Duration(milliseconds: 1300), () {
+      if (!mounted) return;
+      setState(() {
+        _voltageSwitchBusy = false;
+      });
+    });
+  }
+
+  Future<void> _requestManualVoltage(String target) async {
+    if (!isConnected || isAiModeOn || _voltageSwitchBusy) return;
+    final accepted = await sendCommand(target, showError: false);
+    if (accepted && mounted) {
+      _setVoltageBusy(target);
+    }
+  }
+
+  void _setAdaptiveBusy(bool value) {
+    _adaptiveBusyTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _adaptiveSwitchBusy = value;
+    });
+    if (value) {
+      _adaptiveBusyTimer = Timer(const Duration(milliseconds: 1200), () {
+        if (!mounted) return;
+        setState(() {
+          _adaptiveSwitchBusy = false;
+        });
+      });
+    }
   }
 
   void _normalizeBatteryLimits({int? changed}) {
@@ -1006,7 +1092,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool _requiresWriteResponse(String cmd) {
     final upper = cmd.trim().toUpperCase();
-    return isVoltageCommand(upper) ||
+    return upper == '5V' ||
+        upper == '9V' ||
+        upper == '12V' ||
         upper == 'SYNC' ||
         upper == 'OTAENTER' ||
         upper == 'OTAEXIT' ||
@@ -1148,6 +1236,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       _buildTopData(isConnected ? voltage.replaceAll('V', '') : '--', 'V', 'Voltage Indicator', color: Colors.blueAccent),
                       const SizedBox(height: 19),
                       _buildTopData(isConnected ? (isAiModeOn ? 'ON' : 'OFF') : '--', '', 'Adaptive Mode', color: isAiModeOn ? Colors.greenAccent : Colors.grey),
+                      if (isConnected && resetReason != 'POWER_ON' && resetReason != 'UNKNOWN') ...[
+                        const SizedBox(height: 9),
+                        Text(
+                          'ESP32: ${_friendlyResetReason(resetReason)}',
+                          style: const TextStyle(color: Colors.orangeAccent, fontSize: 9.5, fontWeight: FontWeight.w800),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -1345,76 +1440,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Future<void> _selectVoltage(String value) async {
-    if (!isConnected ||
-        isAiModeOn ||
-        _voltageCooldownActive ||
-        _voltageTransitionBusy ||
-        !isVoltageCommand(value)) {
-      return;
-    }
-
-    // The one-second guard starts at the moment the user first presses the
-    // voltage button, not after the ESP32 executes the transition.
-    _startVoltageCooldown();
-
-    if (mounted) {
-      setState(() {
-        _voltageTransitionBusy = true;
-      });
-    }
-
-    final success = await sendCommand(value, showError: false);
-
-    if (!mounted) return;
-
-    setState(() {
-      _voltageTransitionBusy = false;
-    });
-
-    if (!success) {
-      _cancelVoltageCooldown();
-      _showSnackBar(
-        'Voltage command failed',
-        color: Colors.redAccent,
-      );
-    }
-  }
-
-  void _cancelVoltageCooldown() {
-    _voltageCooldownTimer?.cancel();
-    _voltageCooldownTimer = null;
-
-    if (!mounted) {
-      _voltageCooldownActive = false;
-      _voltageTransitionBusy = false;
-      return;
-    }
-
-    setState(() {
-      _voltageCooldownActive = false;
-      _voltageTransitionBusy = false;
-    });
-  }
-
-  void _startVoltageCooldown() {
-    _voltageCooldownTimer?.cancel();
-    if (!mounted) return;
-
-    setState(() {
-      _voltageTransitionBusy = false;
-      _voltageCooldownActive = true;
-    });
-
-    _voltageCooldownTimer = Timer(voltageCooldownDuration, () {
-      if (!mounted) return;
-      setState(() {
-        _voltageCooldownActive = false;
-      });
-      _voltageCooldownTimer = null;
-    });
-  }
-
   Widget _voltageRow(
     String value,
     String mode,
@@ -1422,15 +1447,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     bool isLast = false,
   }) {
     final isActive = voltage == value;
-    final voltageInteractionLocked =
-        locked || _voltageCooldownActive || _voltageTransitionBusy;
     return Column(
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(15),
-          onTap: !isConnected || voltageInteractionLocked
+          onTap: !isConnected || locked || _voltageSwitchBusy
               ? null
-              : () => _selectVoltage(value),
+              : () => _requestManualVoltage(value),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
             padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
@@ -1479,8 +1502,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                   ),
                 ),
-                // The lock icon indicates Adaptive mode only.
-                // A voltage cooldown blocks switching but must not show a lock.
                 if (locked)
                   const Icon(
                     Icons.lock_outline,
@@ -1557,9 +1578,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Switch(
                 value: isConnected && isAiModeOn,
                 activeThumbColor: Colors.green,
-                onChanged: isConnected
+                onChanged: isConnected && !_adaptiveSwitchBusy
                     ? (val) async {
                         setState(() => isAiModeOn = val);
+                        _setAdaptiveBusy(true);
                         final parts = <String>[
                           'ON=${val ? 1 : 0}',
                           'MODE=$aiModeType',
@@ -2035,13 +2057,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       IconButton(icon: const Icon(Icons.add_circle_outline_rounded), color: Colors.black54, onPressed: value >= maxValue ? null : () => onChanged(value + 1)),
     ]);
   }
-}
-
-const Duration voltageCooldownDuration = Duration(seconds: 1);
-
-bool isVoltageCommand(String cmd) {
-  final upper = cmd.trim().toUpperCase();
-  return upper == '5V' || upper == '9V' || upper == '12V';
 }
 
 enum FirmwareCheckStatus {
