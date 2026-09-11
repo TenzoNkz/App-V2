@@ -1021,7 +1021,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _requestManualVoltage(String target) async {
-    if (!isConnected || isAiModeOn || _voltageSwitchBusy || !isVoltageCommand(target)) {
+    if (!isConnected || isAiModeOn || _voltageTransitionBusy || !isVoltageCommand(target)) {
       return;
     }
 
@@ -1466,7 +1466,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(15),
-          onTap: !isConnected || locked || _voltageSwitchBusy
+          onTap: !isConnected || locked || _voltageTransitionBusy
               ? null
               : () => _requestManualVoltage(value),
           child: AnimatedContainer(
