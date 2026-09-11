@@ -31,6 +31,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+const Duration voltageCooldownDuration = Duration(seconds: 1);
+
+bool isVoltageCommand(String command) {
+  final upper = command.trim().toUpperCase();
+  return upper == '5V' || upper == '9V' || upper == '12V';
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
@@ -91,6 +98,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Timer? _adaptiveBusyTimer;
 
   bool isConnected = false;
+
+  bool get _voltageTransitionBusy => _voltageSwitchBusy;
 
   final String serviceUUID = "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d"; 
   final String charRxUUID  = "b2c3d4e5-f6a7-4b5c-8d9e-1f2a3b4c5d6e"; 
@@ -909,10 +918,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           : parsedTemp.toStringAsFixed(1);
     } else if (key == "VOL") {
       voltage = value;
-      if (_voltageSwitchBusy) {
-        _voltageBusyTimer?.cancel();
-        _voltageSwitchBusy = false;
-      }
     } else if (key == "RGB") {
       isRgbOn = (value == "1");
     } else if (key == "AI") {
@@ -993,13 +998,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  void _setVoltageBusy(String target) {
+  void _setVoltageBusy() {
     _voltageBusyTimer?.cancel();
     if (!mounted) return;
     setState(() {
       _voltageSwitchBusy = true;
     });
-    _voltageBusyTimer = Timer(const Duration(milliseconds: 1300), () {
+    _voltageBusyTimer = Timer(voltageCooldownDuration, () {
       if (!mounted) return;
       setState(() {
         _voltageSwitchBusy = false;
@@ -1007,11 +1012,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
+  void _clearVoltageBusy() {
+    _voltageBusyTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _voltageSwitchBusy = false;
+    });
+  }
+
   Future<void> _requestManualVoltage(String target) async {
-    if (!isConnected || isAiModeOn || _voltageSwitchBusy) return;
+    if (!isConnected || isAiModeOn || _voltageSwitchBusy || !isVoltageCommand(target)) {
+      return;
+    }
+
+    _setVoltageBusy();
     final accepted = await sendCommand(target, showError: false);
-    if (accepted && mounted) {
-      _setVoltageBusy(target);
+    if (!accepted) {
+      _clearVoltageBusy();
     }
   }
 
@@ -1022,7 +1039,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _adaptiveSwitchBusy = value;
     });
     if (value) {
-      _adaptiveBusyTimer = Timer(const Duration(milliseconds: 1200), () {
+      _adaptiveBusyTimer = Timer(voltageCooldownDuration, () {
         if (!mounted) return;
         setState(() {
           _adaptiveSwitchBusy = false;
@@ -1092,9 +1109,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool _requiresWriteResponse(String cmd) {
     final upper = cmd.trim().toUpperCase();
-    return upper == '5V' ||
-        upper == '9V' ||
-        upper == '12V' ||
+    return isVoltageCommand(upper) ||
         upper == 'SYNC' ||
         upper == 'OTAENTER' ||
         upper == 'OTAEXIT' ||
@@ -1580,6 +1595,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 activeThumbColor: Colors.green,
                 onChanged: isConnected && !_adaptiveSwitchBusy
                     ? (val) async {
+                        final previous = isAiModeOn;
                         setState(() => isAiModeOn = val);
                         _setAdaptiveBusy(true);
                         final parts = <String>[
@@ -1593,10 +1609,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             'BT=${phoneBatteryTemp.toStringAsFixed(1)}',
                           );
                         }
-                        await sendCommand(
+                        final accepted = await sendCommand(
                           'ADAPT:${parts.join(';')}',
                           showError: false,
                         );
+                        if (!accepted && mounted) {
+                          setState(() => isAiModeOn = previous);
+                          _setAdaptiveBusy(false);
+                        }
                       }
                     : null,
               ),
@@ -1637,10 +1657,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       opacity: locked ? 0.55 : 1.0,
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
-        onTap: !isConnected || locked
+        onTap: !isConnected || locked || _adaptiveSwitchBusy
             ? null
             : () async {
+                final previous = aiModeType;
                 setState(() => aiModeType = index);
+                _setAdaptiveBusy(true);
                 final parts = <String>[
                   'ON=${isAiModeOn ? 1 : 0}',
                   'MODE=$index',
@@ -1650,10 +1672,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     'BT=${phoneBatteryTemp.toStringAsFixed(1)}',
                   );
                 }
-                await sendCommand(
+                final accepted = await sendCommand(
                   'ADAPT:${parts.join(';')}',
                   showError: false,
                 );
+                if (!accepted && mounted) {
+                  setState(() => aiModeType = previous);
+                  _setAdaptiveBusy(false);
+                }
               },
         child: _premiumCard(
           padding: const EdgeInsets.all(12),
