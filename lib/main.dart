@@ -94,6 +94,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _isBatteryReadBusy = false;
   bool _voltageSwitchBusy = false;
   bool _adaptiveCommandInFlight = false;
+  bool? _pendingAdaptiveState;
   bool _resetNoticeShownForConnection = false;
   Timer? _voltageBusyTimer;
 
@@ -628,6 +629,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               isConnected = false;
               _syncFrameReceived = false;
               _isInitialSync = true;
+              _pendingAdaptiveState = null;
             });
           }
           if (Platform.isAndroid) {
@@ -822,6 +824,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _voltageSwitchBusy = false;
         _adaptiveCommandInFlight = false;
+        _pendingAdaptiveState = null;
       });
     }
     try {
@@ -931,7 +934,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } else if (key == "RGB") {
       isRgbOn = (value == "1");
     } else if (key == "AI") {
-      isAiModeOn = (value == "1");
+      final reportedAdaptiveState = value == "1";
+      if (_pendingAdaptiveState == null ||
+          reportedAdaptiveState == _pendingAdaptiveState) {
+        isAiModeOn = reportedAdaptiveState;
+        if (_pendingAdaptiveState == reportedAdaptiveState) {
+          _pendingAdaptiveState = null;
+        }
+      }
     } else if (key == "AIM") {
       final mode = int.tryParse(value);
       if (mode != null && (mode == 0 || mode == 1)) {
@@ -1057,6 +1067,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final previous = isAiModeOn;
     setState(() {
       isAiModeOn = enabled;
+      _pendingAdaptiveState = enabled;
       _adaptiveCommandInFlight = true;
     });
 
@@ -1066,7 +1077,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (enabled && voltage != '5V') {
         final returnedToFive = await sendCommand('5V', showError: false);
         if (!returnedToFive) {
-          if (mounted) setState(() => isAiModeOn = previous);
+          if (mounted) {
+            setState(() {
+              isAiModeOn = previous;
+              _pendingAdaptiveState = null;
+            });
+          }
           return;
         }
       }
@@ -1086,7 +1102,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         showError: false,
       );
       if (!accepted && mounted) {
-        setState(() => isAiModeOn = previous);
+        setState(() {
+          isAiModeOn = previous;
+          _pendingAdaptiveState = null;
+        });
       }
     } finally {
       if (mounted) {
