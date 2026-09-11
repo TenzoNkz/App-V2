@@ -95,6 +95,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _voltageSwitchBusy = false;
   bool _adaptiveCommandInFlight = false;
   bool? _pendingAdaptiveState;
+  // Locks Adaptive UI to the latest user-requested state until the next explicit command.
+  // This prevents stale BLE Adaptive telemetry from flipping the switch back after an ACK.
+  bool? _adaptiveStateLock;
   bool _resetNoticeShownForConnection = false;
   Timer? _voltageBusyTimer;
 
@@ -109,7 +112,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String hotsideTemp = "--"; 
   String voltage = "5V";
   bool isRgbOn = true;
-  bool isAiModeOn = false;
+  bool isAdaptiveModeOn = false;
   double brightness = 100;
   String currentVersion = "V?";
   String resetReason = "UNKNOWN";
@@ -122,7 +125,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double phoneBatteryTemp = -1.0;
   bool phoneBatteryTempAvailable = false; 
   Timer? _batteryTempTimer;
-  int aiModeType = 0;
+  int adaptiveModeType = 0;
 
   int limitHot = 45;
   int limitBat5v = 25;
@@ -193,7 +196,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           });
         }
 
-        if (batteryTempChanged && isConnected && isAiModeOn && aiModeType == 1) {
+        if (batteryTempChanged && isConnected && isAdaptiveModeOn && adaptiveModeType == 1) {
           // Phone battery temperature is a live Adaptive input. Send only when the
           // reported value actually changes, and send it immediately.
           await sendCommand(
@@ -209,7 +212,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           });
         }
 
-        if (isConnected && isAiModeOn && aiModeType == 1) {
+        if (isConnected && isAdaptiveModeOn && adaptiveModeType == 1) {
           // Mark the live phone temperature as unavailable on the ESP32 too.
           await sendCommand('PHONE:BT=-10.0', showError: false);
         }
@@ -653,7 +656,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               rxChar = null;
               hotsideTemp = '--';
               voltage = '--';
-              isAiModeOn = false;
+              isAdaptiveModeOn = false;
               currentVersion = 'V?';
               _incomingBuffer = '';
               _syncFrameReceived = false;
@@ -772,8 +775,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       final brightnessRaw = (brightness / 100.0 * 255.0).round().clamp(1, 255);
       final configParts = <String>[
-        'AI=${isAiModeOn ? 1 : 0}',
-        'AIM=$aiModeType',
+        'AI=${isAdaptiveModeOn ? 1 : 0}',
+        'AIM=$adaptiveModeType',
         'LHT=$limitHot',
         'LB5=$limitBat5v',
         'LB12=$limitBat12v',
@@ -782,7 +785,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         'MD=$rgbModeIndex',
         'BR=$brightnessRaw',
       ];
-      if (phoneBatteryTempAvailable && aiModeType == 1) {
+      if (phoneBatteryTempAvailable && adaptiveModeType == 1) {
         configParts.add(
           'BT=${phoneBatteryTemp.toStringAsFixed(1)}',
         );
@@ -825,6 +828,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _voltageSwitchBusy = false;
         _adaptiveCommandInFlight = false;
         _pendingAdaptiveState = null;
+        _adaptiveStateLock = null;
       });
     }
     try {
@@ -935,9 +939,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       isRgbOn = (value == "1");
     } else if (key == "AI") {
       final reportedAdaptiveState = value == "1";
+      if (_adaptiveStateLock != null) {
+        // Once the user has requested ON/OFF, stale queued BLE telemetry from
+        // the previous state must never make the switch visibly flip back.
+        if (reportedAdaptiveState == _adaptiveStateLock) {
+          isAdaptiveModeOn = reportedAdaptiveState;
+        }
+        return true;
+      }
+
       if (_pendingAdaptiveState == null ||
           reportedAdaptiveState == _pendingAdaptiveState) {
-        isAiModeOn = reportedAdaptiveState;
+        isAdaptiveModeOn = reportedAdaptiveState;
         if (_pendingAdaptiveState == reportedAdaptiveState) {
           _pendingAdaptiveState = null;
         }
@@ -945,7 +958,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     } else if (key == "AIM") {
       final mode = int.tryParse(value);
       if (mode != null && (mode == 0 || mode == 1)) {
-        aiModeType = mode;
+        adaptiveModeType = mode;
       }
     } else if (key == "BRV") {
       final raw = double.tryParse(value) ?? 255;
@@ -1048,7 +1061,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _requestManualVoltage(String target) async {
-    if (!isConnected || isAiModeOn || _voltageTransitionBusy || !isVoltageCommand(target)) {
+    if (!isConnected || isAdaptiveModeOn || _voltageTransitionBusy || !isVoltageCommand(target)) {
       return;
     }
 
@@ -1064,10 +1077,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
-    final previous = isAiModeOn;
+    final previous = isAdaptiveModeOn;
     setState(() {
-      isAiModeOn = enabled;
+      isAdaptiveModeOn = enabled;
       _pendingAdaptiveState = enabled;
+      _adaptiveStateLock = enabled;
       _adaptiveCommandInFlight = true;
     });
 
@@ -1079,8 +1093,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         if (!returnedToFive) {
           if (mounted) {
             setState(() {
-              isAiModeOn = previous;
+              isAdaptiveModeOn = previous;
               _pendingAdaptiveState = null;
+              _adaptiveStateLock = null;
             });
           }
           return;
@@ -1089,9 +1104,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       final parts = <String>[
         'ON=${enabled ? 1 : 0}',
-        'MODE=$aiModeType',
+        'MODE=$adaptiveModeType',
       ];
-      if (enabled && aiModeType == 1 && phoneBatteryTempAvailable) {
+      if (enabled && adaptiveModeType == 1 && phoneBatteryTempAvailable) {
         parts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
       }
 
@@ -1103,8 +1118,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
       if (!accepted && mounted) {
         setState(() {
-          isAiModeOn = previous;
+          isAdaptiveModeOn = previous;
           _pendingAdaptiveState = null;
+          _adaptiveStateLock = null;
         });
       }
     } finally {
@@ -1141,7 +1157,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'LB5=$limitBat5v',
       'LB12=$limitBat12v',
     ];
-    if (isAiModeOn && aiModeType == 1 && phoneBatteryTempAvailable) {
+    if (isAdaptiveModeOn && adaptiveModeType == 1 && phoneBatteryTempAvailable) {
       tempParts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
     }
     await sendCommand(
@@ -1316,7 +1332,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       const SizedBox(height: 19),
                       _buildTopData(isConnected ? voltage.replaceAll('V', '') : '--', 'V', 'Voltage Indicator', color: Colors.blueAccent),
                       const SizedBox(height: 19),
-                      _buildTopData(isConnected ? (isAiModeOn ? 'ON' : 'OFF') : '--', '', 'Adaptive Mode', color: isAiModeOn ? Colors.greenAccent : Colors.grey),
+                      _buildTopData(isConnected ? (isAdaptiveModeOn ? 'ON' : 'OFF') : '--', '', 'Adaptive Mode', color: isAdaptiveModeOn ? Colors.greenAccent : Colors.grey),
                       if (isConnected && resetReason != 'POWER_ON' && resetReason != 'UNKNOWN') ...[
                         const SizedBox(height: 9),
                         Text(
@@ -1429,7 +1445,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildMenuContent() {
     final Widget content = switch (selectedMenuIndex) {
       0 => _buildVoltageMenu(),
-      1 => _buildAiMenu(),
+      1 => _buildAdaptiveMenu(),
       2 => _buildRgbMenu(),
       3 => _buildTempSettingMenu(),
       _ => const SizedBox.shrink(),
@@ -1497,7 +1513,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildVoltageMenu() {
-    final locked = isAiModeOn;
+    final locked = isAdaptiveModeOn;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1604,14 +1620,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildAiMenu() {
+  Widget _buildAdaptiveMenu() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _sectionTitle(
           'Adaptive Switch',
           subtitle:
-              'Automatic voltage control prioritizes overheat protection.',
+              'Choose one Adaptive temperature profile while Adaptive is OFF.',
         ),
         _premiumCard(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -1622,13 +1638,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 height: 42,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: isAiModeOn
+                  color: isAdaptiveModeOn
                       ? Colors.green.withValues(alpha: 0.13)
                       : Colors.black.withValues(alpha: 0.06),
                 ),
                 child: Icon(
-                  isAiModeOn ? Icons.shield_rounded : Icons.shield_outlined,
-                  color: isAiModeOn ? Colors.green.shade700 : Colors.black45,
+                  isAdaptiveModeOn ? Icons.shield_rounded : Icons.shield_outlined,
+                  color: isAdaptiveModeOn ? Colors.green.shade700 : Colors.black45,
                 ),
               ),
               const SizedBox(width: 12),
@@ -1657,7 +1673,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               ),
               Switch(
-                value: isConnected && isAiModeOn,
+                value: isConnected && isAdaptiveModeOn,
                 activeThumbColor: Colors.green,
                 onChanged: isConnected && !_adaptiveCommandInFlight
                     ? _setAdaptiveMode
@@ -1668,7 +1684,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         _sectionTitle(
           'Overheat Protection',
-          subtitle: 'Mode selection is locked while Adaptive is ON.',
+          subtitle: 'Choose a temperature profile while Adaptive is OFF.',
         ),
         Row(
           children: [
@@ -1694,42 +1710,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _adaptiveModeCard(int index, String title, String subtitle) {
-    final selected = aiModeType == index;
-    final locked = isAiModeOn;
+    final selected = adaptiveModeType == index;
+    final locked = isAdaptiveModeOn;
     return Opacity(
       opacity: locked ? 0.55 : 1.0,
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
-        onTap: !isConnected || locked || _adaptiveCommandInFlight
+        onTap: !isConnected || locked || selected
             ? null
             : () async {
-                final previous = aiModeType;
-                setState(() {
-                  aiModeType = index;
-                  _adaptiveCommandInFlight = true;
-                });
+              final previous = adaptiveModeType;
+              setState(() {
+                adaptiveModeType = index;
+              });
 
-                try {
-                  final parts = <String>[
-                    'ON=${isAiModeOn ? 1 : 0}',
-                    'MODE=$index',
-                  ];
-                  if (isAiModeOn && index == 1 && phoneBatteryTempAvailable) {
-                    parts.add('BT=${phoneBatteryTemp.toStringAsFixed(1)}');
-                  }
-                  final accepted = await sendCommand(
-                    'ADAPT:${parts.join(';')}',
-                    showError: false,
-                  );
-                  if (!accepted && mounted) {
-                    setState(() => aiModeType = previous);
-                  }
-                } finally {
-                  if (mounted) {
-                    setState(() => _adaptiveCommandInFlight = false);
-                  }
-                }
-              },
+              // Temperature mode is an independent Adaptive profile choice.
+              // Send it only when the user actually changes the selection;
+              // tapping the already-selected side does nothing. This prevents
+              // repeated ADAPT commands from causing the master Adaptive switch
+              // to visually flicker. The dedicated AIM command changes only the
+              // mode and never changes the Adaptive ON/OFF state.
+              final accepted = await sendCommand(
+                'AIM:$index',
+                showError: false,
+              );
+
+              if (!accepted && mounted) {
+                setState(() => adaptiveModeType = previous);
+              }
+            },
         child: _premiumCard(
           padding: const EdgeInsets.all(12),
           child: Column(
@@ -1763,14 +1772,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              if (locked) ...[
-                const SizedBox(height: 5),
-                const Icon(
-                  Icons.lock_outline,
-                  size: 16,
-                  color: Colors.black38,
-                ),
-              ],
             ],
           ),
         ),
@@ -1944,7 +1945,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildTempSettingMenu() {
     final midLow = limitBat9vMin;
     final midHigh = limitBat9vMax;
-    final locked = isAiModeOn;
+    final locked = isAdaptiveModeOn;
     final controlsEnabled = isConnected && !locked;
 
     return Column(
